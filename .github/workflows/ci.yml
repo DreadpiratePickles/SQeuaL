@@ -1,0 +1,208 @@
+# Everything this repository can prove without a key.
+#
+# There are no secrets here and no `secrets.*` reference anywhere in the file.
+# That is not an oversight. Live runs have happened in this repository — by hand,
+# on purpose, against a quota a person was watching, and committed banner-first
+# under docs/examples/*.live.md — and CI is the wrong place for that. A scheduled
+# job holding a key would spend somebody's quota on every push and would
+# eventually record a "live" number nobody chose to buy.
+#
+# Every job below runs offline, and the last two assert that the offline runs say
+# so on their own first line.
+#
+# The action SHAs are pinned and were copied from project 1's workflow, which is
+# where they were first read. A tag is a moving reference, and an action that
+# changes under a pinned tag is a supply-chain problem in the one place a
+# repository executes somebody else's code.
+#
+# Eight things are checked, in order of how fast they fail:
+#
+#   lint       ruff, at the line length pyproject.toml sets
+#   tests      the whole suite, none of which touches the network
+#   build      `db build` from the committed DDL and the committed seed
+#   guard      every committed few-shot example passes, and a hallucinated
+#              column is still refused with exit 1
+#   ask        one question end to end, offline, with the whole pipeline
+#   eval       ten golden questions, offline, asserting the SYNTHETIC banner in
+#              every file it writes
+#   regress    project 1's own `load_goldens` and `load_target` on our files
+#   clean      nothing above wrote inside the checkout
+#
+# The last four are the ones worth having. The unit tests prove the pieces;
+# those prove that the eight stages compose from a clean checkout, that the
+# offline runs still label themselves, and that the seam to project 1 has not
+# quietly drifted.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: lint, tests, and the whole tool offline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Tests
+        run: uv run pytest -q
+
+      # `data/support.db` is gitignored: the generator and its seed are committed
+      # instead, so the artefact is reproducible from source. Everything below
+      # this step needs it.
+      - name: Build the database
+        run: uv run python scripts/sqeual.py db build
+
+      # The six committed few-shot examples are statements a model is shown and
+      # told to imitate. An example naming a column this schema does not have
+      # would teach it to name one, so every example is guarded here from a clean
+      # checkout as well as in the suite.
+      - name: Guard every committed example
+        env:
+          GEMINI_API_KEY: ""
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY' > examples.txt
+          import pathlib, yaml
+          document = yaml.safe_load(
+              pathlib.Path("src/sqeual/generate/examples.yaml").read_text(encoding="utf-8")
+          )
+          for entry in document:
+              print(" ".join(entry["sql"].split()))
+          PY
+          count=0
+          while IFS= read -r statement; do
+            [ -z "${statement}" ] && continue
+            count=$((count + 1))
+            echo "--- example ${count}"
+            uv run python scripts/sqeual.py guard --sql "${statement}"
+          done < examples.txt
+          test "${count}" -eq 6 || {
+            echo "::error::Expected 6 committed examples, found ${count}."
+            exit 1
+          }
+          echo "${count} committed example(s) pass the guard."
+
+      # A statement the guard must refuse. Exit 1 is the finding code, so a 0
+      # here would mean the guard stopped catching a hallucinated column — which
+      # is the single most important thing in this repository.
+      - name: The guard still refuses a hallucinated column
+        env:
+          GEMINI_API_KEY: ""
+        run: |
+          set -euo pipefail
+          set +e
+          uv run python scripts/sqeual.py guard \
+            --sql "SELECT region, SUM(revenue) FROM orders" | tee guard.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          test "${code}" -eq 1 || {
+            echo "::error::The guard exited ${code} on a hallucinated column; expected 1."
+            exit 1
+          }
+          grep -q 'unknown_column' guard.txt
+
+      # No key at all. `--dry-run` swaps in the scripted provider, so this
+      # exercises slice, generate, guard, execute, verify, judge and render with
+      # nothing but the repository.
+      - name: One question, end to end, offline
+        env:
+          GEMINI_API_KEY: ""
+        run: |
+          set -euo pipefail
+          uv run python scripts/sqeual.py ask \
+            "How much did we refund to customers in Berlin last month?" \
+            --dry-run --runs "$(mktemp -d)" | tee ask.txt
+          grep -q '## Confidence' ask.txt
+          grep -q 'Computed from evidence, never asked of a model' ask.txt
+          grep -q '## The query that ran' ask.txt
+
+      # Ten golden questions through the whole harness, with the scripted
+      # provider. The banner assertions are the point: a synthetic evaluation
+      # that did not say so on its first line is a document somebody will
+      # eventually quote as evidence.
+      - name: Ten golden questions, offline
+        env:
+          GEMINI_API_KEY: ""
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)/eval"
+          uv run python scripts/sqeual.py eval \
+            --dry-run --limit 10 --out "${out}" | tee eval.txt
+
+          echo "--- the banners ---"
+          head -1 "${out}/eval.md" | grep -q '^SYNTHETIC —'
+          head -1 "${out}/calibration.md" | grep -q '^SYNTHETIC —'
+          grep -q '^SYNTHETIC —' eval.txt
+          uv run python - "${out}" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          out = Path(sys.argv[1])
+          payload = json.loads((out / "eval.json").read_text(encoding="utf-8"))
+          assert next(iter(payload)) == "banner", "the banner must be the first key"
+          assert payload["banner"].startswith("SYNTHETIC"), payload["banner"]
+
+          lines = (out / "results.jsonl").read_text(encoding="utf-8").splitlines()
+          header = json.loads(lines[0])
+          assert header["record"] == "header", header
+          assert header["dry_run"] is True, header
+          assert len(lines) == 11, f"expected a header and 10 results, got {len(lines)}"
+          print(f"{len(lines) - 1} question(s) scored offline, every file labelled SYNTHETIC")
+          PY
+
+      # The claim the `regress` integration makes, checked by the only thing that
+      # can check it: project 1's own loader, on our file.
+      - name: Project 1 still accepts our golden file
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          from regression_detect.goldens import load_goldens
+          from regression_detect.target.adapters.base import Target
+          from regression_detect.target.adapters.factory import load_target
+
+          cases = load_goldens(Path("regress/goldens.yaml"))
+          assert len(cases) == 8, f"expected 8 cases, got {len(cases)}"
+
+          section = dict(tomllib.loads(Path("regress/regression.toml").read_text())["target"])
+          # The committed cwd is a placeholder a reader replaces; the adapter
+          # requires it to exist, so it is pointed at the checkout here.
+          section["cwd"] = "."
+          target = load_target(section, provider_factory=lambda: None)
+          assert isinstance(target, Target), target
+          print(f"load_goldens accepted {len(cases)} case(s); {target.target_id} is a Target")
+          PY
+
+      # Nothing above wrote inside the checkout except `data/support.db`, which
+      # is gitignored. `git status --porcelain` is the load-bearing check because
+      # it sees untracked files too — a stage that wrote a brand-new runs/
+      # directory into the checkout would leave `git diff` completely silent.
+      - name: The checkout was not touched
+        run: |
+          set -euo pipefail
+          rm -f examples.txt guard.txt ask.txt eval.txt
+          git status --porcelain
+          test -z "$(git status --porcelain)" || {
+            echo "::error::A step wrote inside the checkout."
+            exit 1
+          }
+          echo "the checkout is clean"
