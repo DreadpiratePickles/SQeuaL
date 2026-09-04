@@ -1,0 +1,22 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+.coverage
+htmlcov/
+# The database is a BUILD ARTEFACT, not a source file. `sqeual db build` is
+# deterministic — a fixed seed and a fixed sequence of draws — so the generator
+# plus `data/schema.sql` reproduce it exactly, and both of those are committed.
+# A 700 KB binary in Git would be a thing nobody can review, that changes
+# wholesale on every regeneration, and that a reader has to trust matches the
+# DDL beside it. `sqeual db build` prints a row digest so two builds can be
+# compared without diffing binaries.
+#
+# Anchored to the repository root, so a future `src/sqeual/data/` cannot be
+# caught by it.
+/data/*.db
+/data/*.db-journal
+/data/*.db-wal

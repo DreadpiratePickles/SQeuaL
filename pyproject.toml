@@ -1,0 +1,56 @@
+[project]
+name = "sqeual"
+version = "0.1.0"
+description = "Text-to-SQL where the model never writes a number: SQL is proposed, then parsed, guarded, executed read-only, and verified by deterministic code."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Project 1 supplies the provider seam (the Provider protocol and its typed
+    # error hierarchy), the pacing helper, and the criterion judge. Phase A
+    # calls none of it — no stage here talks to a model yet — but the pin is
+    # declared now so that the dependency set a Phase A reader installs is the
+    # same one Phase B runs against. Pinned to a COMMIT, not a branch: an
+    # answer's provenance names the model and the code that called it, and a
+    # branch that moves underneath makes that provenance a guess.
+    "regression-detect @ git+https://github.com/DreadpiratePickles/regress@888a3e3",
+    # The parser the guard is built on. Pinned exactly rather than with a lower
+    # bound: this package does not merely call sqlglot, it depends on the SHAPE
+    # of the tree sqlglot returns — which expression class a PRAGMA becomes,
+    # whether an unknown function is an `Anonymous`, how a CTE hangs off its
+    # SELECT. A minor release that re-parses one of those is a hole in the
+    # guard, not a deprecation warning, so the version moves only when a human
+    # re-runs the suite against it.
+    "sqlglot==30.18.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# Required because `regression-detect` is a direct git reference rather than a
+# PyPI release. Project 1 is not published; pinning its commit is the only way
+# to make this package's dependency set reproducible.
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sqeual"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

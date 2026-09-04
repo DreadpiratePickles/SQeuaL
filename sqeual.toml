@@ -1,0 +1,173 @@
+# Configuration for SQeuaL.
+#
+# Everything in this file is a limit somebody should be able to argue with:
+# which tables a question may reach, how many rows may come back, how long a
+# query may run, and how much of the schema a model gets to see. None of it is a
+# literal inside the guard, so widening any of it is a diff a person reviews
+# rather than a constant somebody notices six months later.
+#
+# Model identifiers are deliberately absent. `[models]` names *references* —
+# the names of environment variables — and `src/sqeual/config.py` resolves them
+# to model ids. Committed configuration therefore contains no vendor strings,
+# and a deployment can point Phase B at a different model without editing this
+# file. Secrets are absent for the same reason: set GEMINI_API_KEY in a `.env`
+# at the repository root, which is gitignored and read by nothing in Phase A.
+
+[db]
+# Relative to this file, never to the shell that started the run and never
+# absolute: a committed path containing somebody's home directory is a path
+# that works on exactly one machine.
+#
+# The database itself is NOT committed — `data/*.db` is gitignored. The
+# generator is committed instead, and it is deterministic, so the artefact is
+# reproducible from source rather than carried in Git. `data/schema.sql` IS
+# committed: it is the definition the guard checks hallucinated columns
+# against, and it belongs where a human can read it.
+path = "data/support.db"
+schema_sql = "data/schema.sql"
+
+# The seed for the row generator. Fixed and committed, which is what makes
+# `sqeual db build` reproducible: the same seed and the same generator produce
+# the same database, so a test that asserts a row count is asserting something
+# stable rather than something that happened to be true the day it was written.
+# Change it and every committed example figure in the docs becomes wrong.
+seed = 20260904
+
+[schema]
+# How many tables the slicer may put in front of a model for one question. The
+# cost of one too few is a question that cannot be answered at all; the cost of
+# one too many is a few hundred tokens and slightly more room for the model to
+# join something irrelevant. The asymmetry is why this is 6 rather than 3.
+max_tables = 6
+
+# Sample values are the single most useful thing in a schema card — a model that
+# can see `status` holds 'refunded' does not have to guess 'REFUNDED' — and the
+# single easiest way to leak data. Both limits are here for that reason.
+#
+# A column gets sample values only when it has at most `max_distinct_values`
+# distinct values, i.e. only when it is enum-shaped. That rule is what stops
+# `email` and `subject` from being sampled: a column with a value per row tells
+# a model nothing it can generalise and hands it real content.
+max_sample_values = 5
+max_distinct_values = 20
+max_sample_chars = 40
+
+[schema.synonyms]
+# Business vocabulary -> table name. The slicer matches a question's words
+# against table and column names first; this map is what makes "client" reach
+# `customers` and "complaint" reach `tickets`.
+#
+# This is deliberately a hand-written table and not an embedding. A slice that
+# is computed from a fixed map is one a human can predict, argue with and fix by
+# editing a line; a slice computed from a similarity score is one nobody can
+# explain when it goes wrong. See docs/design.md §12.
+#
+# Keys are matched after lowercasing and after stripping one trailing "s", so
+# "refunds" finds the "refund" key here and only the singular needs listing.
+refund = "refunds"
+refunded = "refunds"
+reimbursement = "refunds"
+chargeback = "refunds"
+money_back = "refunds"
+customer = "customers"
+client = "customers"
+buyer = "customers"
+shopper = "customers"
+account = "customers"
+ticket = "tickets"
+complaint = "tickets"
+issue = "tickets"
+case = "tickets"
+support = "tickets"
+enquiry = "tickets"
+inquiry = "tickets"
+order = "orders"
+purchase = "orders"
+sale = "orders"
+basket = "orders"
+cart = "orders"
+item = "order_items"
+line = "order_items"
+lineitem = "order_items"
+product = "products"
+sku = "products"
+catalogue = "products"
+catalog = "products"
+agent = "agents"
+rep = "agents"
+staff = "agents"
+advisor = "agents"
+
+[guard]
+# The LIMIT the guard writes into every query that does not already carry a
+# smaller one. This is a rewrite, not a rejection: a model that forgets a LIMIT
+# has not done anything wrong, and refusing the query would teach it nothing.
+# 200 is chosen to be larger than any answer a person reads and small enough
+# that a runaway join cannot fill memory.
+max_rows = 200
+
+# How deeply a SELECT may nest below the outermost one. A CTE counts as one
+# level, so 2 permits `WITH x AS (...) SELECT ... WHERE y IN (SELECT ...)` and
+# refuses the next one down. The limit exists because nesting is where the
+# column resolver's confidence drops fastest: every level adds a scope whose
+# output columns have to be derived rather than read from the schema.
+max_subquery_depth = 2
+
+# `SELECT *` on a table with more rows than this is refused. Not because the
+# query is dangerous — the LIMIT bounds it — but because `SELECT *` is what a
+# model writes when it has not worked out which columns answer the question, and
+# a row of twelve columns is a worse answer than a number.
+star_row_threshold = 100
+
+# Set true to permit `SELECT *` on any table regardless of size. Off, because
+# the default posture is that a question has an answer, not a table dump.
+allow_star = false
+
+# Tables a question may reach. Empty means "every table in the schema card",
+# which is the right default for a database that exists to be queried. Filling
+# it in is how a deployment carves out a table the model must never see — a
+# `staff_salaries` that lives in the same database as the support tickets. A
+# table absent from this list fails the guard as `table_not_allowed`, which is a
+# different finding from `unknown_table` on purpose: one is a policy decision,
+# the other is a hallucination, and conflating them would hide both.
+allowed_tables = []
+
+# The only functions a generated query may call. An allowlist, not a denylist:
+# SQLite ships `load_extension`, `readfile` and `writefile`, and a denylist is a
+# list of the attacks somebody has already thought of.
+#
+# Every entry here is something a business question needs. Nothing here can
+# write, read a file, or reach outside the database. Adding to this list widens
+# what a model can make the database do, so it is a reviewed change.
+allowed_functions = [
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "ROUND", "TOTAL",
+    "DATE", "STRFTIME", "JULIANDAY",
+    "COALESCE", "LOWER", "UPPER", "LENGTH", "ABS", "GROUP_CONCAT",
+]
+
+[execute]
+# Wall-clock budget for one query, enforced by a SQLite progress handler rather
+# than by a timer in Python: a thread cannot interrupt a C-level scan, and the
+# progress handler runs inside the query. 5 seconds is far longer than any
+# question on this database needs and short enough that a cartesian product
+# announces itself.
+max_ms = 5000
+
+# The hard cap on rows read out of the cursor. This is a BACKSTOP, not a
+# duplicate of `[guard] max_rows`: the guard rewrites the SQL, and this is what
+# holds if the SQL that reaches the executor was never guarded. It must be at
+# least `[guard] max_rows`, and config loading refuses a file where it is not.
+max_rows = 500
+
+# `EXPLAIN QUERY PLAN` is captured for every query. A full scan of a table with
+# more rows than this is reported as a WARNING, never a failure: a full scan of
+# a 2,000-row table is how you correctly answer "how many orders were there",
+# and a tool that refused it would be wrong more often than the query is.
+plan_scan_row_threshold = 1000
+
+[models]
+# Phase A calls no model at all. These references exist so that the vocabulary
+# is fixed before the first call is written, and so `config.py` — the only
+# module in this package that may name a model — has something to resolve.
+sql_model_ref = "SQEUAL_SQL_MODEL_ID"
+judge_model_ref = "SQEUAL_JUDGE_MODEL_ID"
