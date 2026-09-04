@@ -9,9 +9,10 @@
 # Model identifiers are deliberately absent. `[models]` names *references* —
 # the names of environment variables — and `src/sqeual/config.py` resolves them
 # to model ids. Committed configuration therefore contains no vendor strings,
-# and a deployment can point Phase B at a different model without editing this
+# and a deployment can point `ask` at a different model without editing this
 # file. Secrets are absent for the same reason: set GEMINI_API_KEY in a `.env`
-# at the repository root, which is gitignored and read by nothing in Phase A.
+# at the repository root, which is gitignored and read by exactly one module,
+# `src/sqeual/providers/gemini.py`. `--dry-run` needs neither.
 
 [db]
 # Relative to this file, never to the shell that started the run and never
@@ -166,8 +167,125 @@ max_rows = 500
 plan_scan_row_threshold = 1000
 
 [models]
-# Phase A calls no model at all. These references exist so that the vocabulary
-# is fixed before the first call is written, and so `config.py` — the only
-# module in this package that may name a model — has something to resolve.
+# References, never model ids: `config.py` is the only module in this package
+# that may name a model, and it resolves these to one. Point either at another
+# model for one deployment by exporting the variable it names.
+#
+# `judge_model_ref` pointing at a DIFFERENT family from `sql_model_ref` is the
+# change that would make the back-translation verdict worth quoting. While they
+# resolve to the same model the judge is grading its own family's output, which
+# biases it upward — every trace records `same_family` for that reason. It needs
+# a second key, not a code change.
 sql_model_ref = "SQEUAL_SQL_MODEL_ID"
 judge_model_ref = "SQEUAL_JUDGE_MODEL_ID"
+
+[time]
+# The date every relative phrase in a question resolves against. A committed
+# date, deliberately, and never `today`: "last month" has to mean the same thing
+# on every run, or the same question gives two different answers a week apart
+# and neither one is reproducible.
+#
+# The model is TOLD this date in its prompt, so it can write the right literals.
+# Code independently resolves the window from the same date and checks the
+# literals the model actually wrote against it — telling a model the date is a
+# prompt, and checking what it did with it is a control.
+#
+# Chosen to sit on the last day the generated database holds data, so "last
+# month" is a full month with rows in it.
+as_of = "2026-08-31"
+
+[generate]
+# How many candidate statements one question produces. The first is always at
+# `temperature` and is the one that answers; the other k-1 are at
+# `sample_temperature` and exist only to agree or disagree with it. Agreement is
+# a confidence factor, never a source of truth — three models can be wrong in
+# the same way, and a vote among them would launder that into certainty.
+k = 3
+
+# The primary sample's temperature. Zero, so the statement a user gets is as
+# reproducible as the provider allows.
+temperature = 0.0
+
+# The other samples' temperature. Non-zero on purpose: k identical samples at
+# temperature 0 would agree with each other by construction and measure nothing.
+sample_temperature = 0.7
+
+# How many times a guard failure may be fed back to the model. One. The codes
+# are the payload (`unknown_column`, `ambiguous_column`), because a model
+# repairs better against a named finding than against a paragraph — and a second
+# failure is final, because an unbounded repair loop is a bill with no ceiling.
+max_repairs = 1
+
+# How many worked examples from `generate/examples.yaml` go into the prompt.
+max_examples = 6
+
+[verify]
+# Decimal places floats are rounded to before two result sets are compared.
+# SQLite's AVG returns a float, and two arithmetically identical queries can
+# differ in the last bit; comparing raw floats would report disagreement between
+# two correct answers.
+float_places = 2
+
+[answer]
+# The most rows a rendered answer prints. Past a screenful an answer stops being
+# an answer and becomes a table dump, which is the thing this tool exists not to
+# hand back.
+max_rows_shown = 20
+
+# Whether a model may write the one-sentence phrasing above the table. Off by
+# default. When it is on, every numeric token in the sentence is checked against
+# the result cells and the row count, and a sentence containing a number that is
+# in neither is discarded — so the guarantee holds either way, and this switch
+# only decides whether the sentence is nicer.
+llm_phrasing = false
+
+# The database stores integer cents and records no currency anywhere — a
+# `*_cents` column is a count, not an amount. So the currency is DECLARED here
+# rather than inferred, because "1,250" is a different answer in two currencies
+# and the difference is invisible.
+currency = "EUR"
+currency_symbol = "€"
+
+[confidence]
+# What the confidence score is made of. Integers in hundredths rather than
+# floats: a threshold is a line somebody argues about in a pull request, and
+# `0.55` invites a diff that reads `0.5500000001`. The division by 100 happens
+# exactly once, where the score is computed.
+#
+# The four weights are a weighted average over the factors that APPLY to a given
+# run; a factor with nothing to say (no time phrase in the question, a judge that
+# could not be read, k = 1) is dropped from both halves of the fraction rather
+# than counted as a pass. That is the difference between "we checked and it was
+# fine" and "we never looked", and it must survive into the score.
+#
+# None of them may be zero. A zero weight silently disables a check while the
+# report still lists it as having run.
+weight_intent = 40
+weight_judge = 30
+weight_agreement = 20
+weight_sanity = 10
+
+# Subtracted outright when the model needed its guard findings fed back. A
+# statement that had to be repaired is a statement the model got wrong once.
+repair_penalty = 15
+
+# Read top down: at or above `high_threshold` is HIGH, then MEDIUM, then LOW,
+# and below `abstain_threshold` the tool refuses and shows no figures at all.
+# Raising the last one makes the tool refuse more; lowering it turns refusals
+# into guesses, which is the change a reviewer should question hardest.
+high_threshold = 75
+medium_threshold = 55
+abstain_threshold = 40
+
+[cost]
+# What a run's token counts are priced at, in micro-USD per 1,000 tokens. A
+# micro-USD is a millionth of a dollar, because token prices are quoted at four
+# or five significant figures and cents are far too coarse for one call.
+#
+# Both are ZERO, which means UNPRICED and never "free". Nobody in this
+# repository has entered a vendor tariff, and inventing one would put a made-up
+# number in the money column of every trace. A trace records `priced: false`
+# while these are zero, so a cost of 0 cannot be read as a bill of nothing.
+# Fill them in from the vendor's published price list to price a run.
+input_micro_usd_per_1k_tokens = 0
+output_micro_usd_per_1k_tokens = 0

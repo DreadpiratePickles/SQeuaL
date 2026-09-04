@@ -1,149 +1,141 @@
-# Stage: 06_verify — PLANNED (Phase C)
+# Stage: 06_verify — BUILT (Phase B)
 
-> **Nothing in this stage is implemented.** This file is the contract it will be
-> built against. It exists because of what the guard deliberately does *not*
-> claim: `guard_sql` proves a statement is well-formed, single, read-only and
-> made of real tables and columns, and nothing in its twelve rules has an
-> opinion about whether it answers anybody's question.
+> Implemented in `src/sqeual/verify/`. It exists because of what the guard
+> deliberately does *not* claim: `guard_sql` proves a statement is well-formed,
+> single, read-only and made of real tables and columns, and nothing in its
+> twelve rules has an opinion about whether it answers anybody's question.
 
 ## Objective
 
-Decide whether the guarded statement chosen by stage 05 answers the question
-that was actually asked, and attach a confidence that was computed from
-evidence rather than requested from a model.
+Decide whether the guarded statement chosen by stage 05 answers the question that
+was actually asked, and produce the evidence stage 07 turns into a confidence
+that was **computed** rather than requested from a model.
 
 ## Inputs
 
 | Path or source | Layer | Authority | Required | Relevant section |
-|---|---:|---|---:|---|
-| `runs/<ts>/chosen.json` | 4 | Authoritative | Yes | `question`, `normalised_sql`, `slice`, `agreement`, `schema_sha256` |
-| `runs/<ts>/candidates.jsonl` | 4 | Authoritative | Yes | Guard `codes` per sample, and how many samples were discarded |
-| The `GuardReport` for the chosen SQL | 4 | Authoritative | Yes | `codes`, `tables_used`, `columns_used`, `table_aliases` |
-| The `ResultSet` from stage 05 | 4 | Authoritative | Yes | `columns`, `row_count`, `truncated`, `plan.warnings` |
-| `[models] judge_model_ref` | 3 | Authoritative | Yes | Resolved through `config.model_id_for_ref("SQEUAL_JUDGE_MODEL_ID")` |
-| A new `[verify]` section | 3 | Authoritative | Yes | `min_confidence`, the confidence weights, `aggregate_terms`, `period_terms` |
+|---|---|---|---|---|
+| The `GenerationOutcome` from stage 05 | 4 | Authoritative | Yes | `question`, `primary.report`, `primary.result`, `time_window`, `schema_slice` |
+| The `SchemaCard` from stage 02 | 4 | Authoritative | Yes | Date columns, grouping columns, column names |
+| `sqeual.toml` | 3 | Authoritative | Yes | `[schema.synonyms]` — the same map the slicer used |
+| `[models] judge_model_ref` | 3 | Authoritative | Yes | Resolved through `config.model_id_for_ref` |
+| `verify/prompts/explain_v1.md` | 3 | Authoritative | Yes | The back-translation prompt, committed and hashed into every trace |
+| Project 1's `judge/prompts/judge_v1.md` | 3 | Authoritative | Yes | The judge prompt, hashed into every trace |
 
-The verifier is given the SQL and the question and never the reference answer,
-because a check that can see the answer key is measuring the key rather than the
-system. The confidence weights live in `sqeual.toml` for the same reason every
-other limit does: a number that decides whether a user sees an answer or a
-refusal is a number somebody should be able to argue with in a pull request.
+The verifier is given the SQL and the question and never a reference answer: a
+check that can see the answer key is measuring the key rather than the system.
 
-## Process (planned)
+## Process (built)
 
-Steps 1 and 2 are deterministic code and need no model at all. Step 3 is the
-only model call; step 4 is project 1's judge; step 5 is arithmetic.
+Steps 1 and 2 are deterministic and need no model. Step 3 is the only model call
+this stage makes on its own behalf; step 4 is project 1's judge.
 
-1. **Slice coverage.** Compare `report.tables_used` against the tables the
-   stage 02 slicer said the question needed. A statement that answers "how much
-   did we refund" without touching `refunds` is suspicious in a way that
-   requires no language understanding to notice. This is a *finding*, not a
-   veto: the slicer's third tier is deliberately generous on recall, so a
-   statement using fewer tables than the slice offered is normal and one using
-   a table the slice never mentioned is impossible — `narrowed_to` already made
-   that `table_not_allowed`.
-2. **Shape checks.** Three of them, all mechanical. An aggregate question — one
-   whose terms intersect `[verify] aggregate_terms` ("how many", "total",
-   "average") — should produce an aggregate: one row, or a small number of
-   grouped rows, not two hundred. A question naming a period should carry a
-   date predicate somewhere in the statement, checked against the parsed tree
-   rather than by searching the string for "WHERE", because a date literal in a
-   `SELECT` list is not a filter. And a question asking for a superlative
-   ("largest", "most recent") should carry an `ORDER BY`. Each is a cheap,
-   explainable signal; none of them is sufficient alone, which is why they feed
-   a score rather than a verdict.
-3. **Back-translation, blind.** A model is shown `normalised_sql` and the
-   sliced schema card and asked what question this statement answers, in one
-   English sentence. It is **not** shown the original question. That blindness
-   is the whole design: a verifier that can see the question will paraphrase
-   the question instead of reading the SQL, and the comparison then passes by
-   construction. The rejected alternative — asking one model "does this SQL
-   answer this question, yes or no" — fails for exactly that reason, and fails
-   silently, which is worse.
-4. **Judge the pair.** Project 1's `judge.criterion.judge_criterion` grades
-   whether the back-translation and the original question ask the same thing,
-   against a written criterion with a pass/fail verdict and a reason. Project 1
-   already owns the prompt, the parsing and the failure modes of criterion
-   judging; re-implementing it here would give this project a second opinion
-   about a problem that has one solved implementation, and the two would drift.
-5. **Compute the confidence.** Never ask for it. A model asked "how confident
-   are you, 0 to 1" produces a number with no referent — it is not calibrated
-   against anything, it cannot be audited, and it will happily say 0.95 about a
-   fabricated column. The score is instead a weighted combination of things
-   that were counted: the agreement group size from stage 05 over `k`; whether
-   the guard rewrote anything (`limit_injected` and `limit_reduced` are notes,
-   not faults, but a statement that needed rewriting is a statement the model
-   got slightly wrong); the slice-coverage and shape findings from steps 1–2;
-   the judge verdict from step 4; whether the `ResultSet` came back empty; and
-   whether it came back `truncated`. Each input, its weight and its
-   contribution is written out, so a confidence of 0.4 can be read as a
-   sentence rather than trusted as a number.
+1. **Four intent checks** (`intent.py`), each PASS, FAIL or NA with evidence a
+   human can dispute. They read the **parse tree**, never the string.
+   - `time_window` — a period in the question requires a predicate on a date
+     column of a table the statement reads, *and* every date-shaped literal in
+     the statement must be consistent with the window code resolved from
+     `[time] as_of`. Consistency rather than equality, because
+     `>= '2026-07-01' AND < '2026-08-01'` is as correct as `BETWEEN`, and
+     `STRFTIME('%Y-%m', d) = '2026-07'` is too.
+   - `aggregation` — "how many" needs a COUNT or SUM, "total" a SUM, "average" an
+     AVG, a superlative an ORDER BY, and a top-N a LIMIT as well. An "average"
+     suppresses the SUM requirement, because "the average order total" is one
+     request and not two.
+   - `entities` — every table the question names, directly or through the
+     slicer's synonym map, must appear in `report.tables_used`.
+   - `grouping` — "per", "by" or "each" needs a GROUP BY, and on the named column
+     when the question named one. A `by` after "sorted" or "ordered" is a sort and
+     is excluded, because a check that fires on correct SQL is a check people
+     learn to ignore.
+2. **Four result-shape checks** (`sanity.py`).
+   - `scalar_shape` — a question asking for one figure should get one row with
+     one numeric cell. Suppressed when the question also groups or asks for a
+     top-N.
+   - `top_n_rows` — "top 5" should return at most five rows.
+   - `not_truncated` — FAIL. A sum over a truncated result is wrong and looks
+     right, which is the most dangerous failure this system has.
+   - `empty_result` — **FLAG**, never FAIL. "No refunds in March" is frequently
+     the correct answer, and it is surfaced in the answer instead.
+3. **Back-translation, blind.** A model is shown `normalised_sql` and the sliced
+   card and asked what the statement does, as strict JSON `{"explanation": str}`.
+   It is **not** shown the question, and `tests/test_verify_backtranslation.py`
+   asserts the absence phrase by phrase. A verifier that can see the question
+   paraphrases the question instead of reading the SQL, and the comparison then
+   passes by construction — silently, which is worse than failing.
+4. **Judge the pair.** Project 1's `judge_criterion` grades the explanation
+   against the question, on two criteria built in code that point in opposite
+   directions: "the described query answers the question — same measure, same
+   filters, same grouping", and "the described query does not compute something
+   the question did not ask for". One criterion catches a query that answers the
+   wrong question and misses one that answers the right question *and* three
+   others.
+
+**A judge error is not a fail and is never a pass.** A verdict that could not be
+parsed, or a provider that could not be reached, is recorded as `error`, and
+stage 07 drops the whole judge factor from the confidence average rather than
+counting the half that came back.
 
 **The self-preference problem is live and is not solved here.**
-`config.JUDGE_MODEL_ID` is currently defined as `SQL_MODEL_ID` — one provider
-key exists in this workspace — so the model grading the back-translation is
-from the same family as the model that wrote the SQL. Models agree with output
-from their own family more readily than a different family would, which biases
-this check upward. The consequence is stated plainly rather than hedged: the
-step-4 pass rate is not an accuracy figure and must not be quoted as one until
-`SQEUAL_JUDGE_MODEL_ID` points at another family. Steps 1, 2 and 5 are
-unaffected, because none of them asks a model anything.
+`config.JUDGE_MODEL_ID` is defined as `SQL_MODEL_ID` — one provider key exists in
+this workspace — so the model grading the back-translation is from the same
+family as the model that wrote the SQL. `same_family` is written into **every**
+trace rather than documented once, so a later analysis of pass rates cannot
+silently mix biased and unbiased verdicts. The judge factor's pass rate is not an
+accuracy figure and must not be quoted as one until `SQEUAL_JUDGE_MODEL_ID`
+points at another family. Steps 1 and 2 are unaffected: neither asks a model
+anything.
 
-## Outputs (planned)
+## Outputs (built)
 
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `runs/<ts>/verification.json` | `{back_translation, judge: {verdict, reason, model_id}, findings: [{check, status, detail}], confidence: {score, inputs: [{name, value, weight, contribution}]}, same_family: bool}` | Stage 07, stage 08, and a human reading a refusal |
-| stdout | The back-translation next to the question, the findings, and the score with its inputs | A human running `sqeual ask --explain` |
+| `runs/<ts>/trace.json` | `verify.intent[]`, `verify.sanity[]` (`check`, `status`, `evidence`), `verify.back_translation{explanation, error, verdicts[], explain_model_id, judge_model_id}`, `verify.same_family` | Stage 07, stage 08, and a human reading a refusal |
+| `Verification` | `intent_fraction`, `sanity_fraction`, `checks`, `back_translation`, `same_family` | Stage 07 |
 
-`same_family` is recorded on every run rather than documented once, so that a
-later analysis of pass rates cannot silently mix biased and unbiased verdicts.
+## Verify (built)
 
-## Verify (planned)
+`tests/test_verify_intent.py` (33 cases) and
+`tests/test_verify_backtranslation.py`:
 
-- The load-bearing test: a hand-written case where the SQL is valid and
-  irrelevant — `SELECT COUNT(*) FROM orders` against "how much did we refund in
-  March" — must fail verification. If this passes, the stage does nothing.
-- A fixture judge, so the confidence arithmetic is tested without a network
-  call: same inputs, same score, and every input's contribution summing to the
-  total.
-- A test that the back-translation prompt contains no substring of the original
-  question. Blindness is a property that decays the first time somebody
-  "improves" the prompt, so it is asserted rather than trusted.
-- A test that a `truncated` `ResultSet` lowers the score, and an empty one
-  lowers it differently — an empty result is often correct ("no refunds in
-  March") and truncation never is.
-- Hand-labelled cases in both directions: relevant statements that must pass and
-  irrelevant ones that must fail, so that stage 08 can report precision and
-  recall rather than only a pass rate.
+- **The load-bearing case**: `SELECT COUNT(*) FROM orders` for "how much did we
+  refund in March" fails `entities`, `time_window` *and* `aggregation`. If that
+  passed, the stage would do nothing.
+- Blindness asserted phrase by phrase on the explain message, and the explain
+  system prompt asserted byte-identical to the committed file.
+- NA asserted as often as PASS. "We checked and it was fine" and "there was
+  nothing to check" must never render the same.
+- A judge reply that cannot be parsed is `error`, and a provider failure is
+  `error` — neither is `fail`.
+- A failed explanation leaves **both** verdicts unavailable and makes only one
+  call, because there is nothing to grade.
+- The exclusive-upper-bound spelling passes; the wrong month fails and names the
+  offending literal.
+- A date literal in a `SELECT` list is not a filter.
 
-## Approval (planned)
+## Approval
 
-No human gate on running the verifier. Two things stay blocked. This stage may
-never rewrite the SQL — a verifier that repairs what it is checking is a
-generator, and stage 05 is where repair is bounded and logged. And it may never
-raise a confidence: every input to step 5 can only lower or hold the score
-relative to the agreement baseline, so there is no path by which a model's
-opinion promotes a weak answer.
+No human gate. Two things stay blocked and should. This stage may never rewrite
+the SQL — a verifier that repairs what it is checking is a generator, and stage
+05 is where repair is bounded and logged. And every factor it produces is a
+fraction in [0, 1], so nothing here can *raise* a confidence: the worst any check
+can do is fail to lower it.
 
-Changing `[verify] min_confidence` is the reviewed decision that matters, since
-it is the line between an answer and a refusal in stage 07. Pointing
-`SQEUAL_JUDGE_MODEL_ID` at a second family is the change that would make step 4
-worth quoting, and it needs a key rather than a code review.
+Pointing `SQEUAL_JUDGE_MODEL_ID` at a second family is the change that would make
+step 4 worth quoting. It needs a key, not a code review.
 
-## Failure Behavior (planned)
+## Failure Behavior (built)
 
 | Failure | Behavior |
 |---|---|
-| `chosen.json` absent — stage 05 refused | Nothing to verify. This stage does not run and stage 07 renders the refusal |
-| Back-translation call fails after retries | The judge input is missing. Confidence is computed from steps 1, 2 and 5 alone, and `judge.verdict` is recorded as `unavailable` — never defaulted to pass |
-| `judge_criterion` returns an unparseable verdict | Same treatment as above, with the raw response kept. A judge that cannot be read has not agreed |
-| Judge verdict is fail | The score falls below `min_confidence` by construction; stage 07 renders a refusal with the back-translation, so the human can see what the SQL actually says |
-| Slice coverage empty — no overlap at all | A finding of its own, weighted heavily. Not a veto, because a legitimate `COUNT(*)` over one table can answer a question that mentioned two |
-| Confidence below `min_confidence` | Exit **1**. The run completed and produced a finding; that is what exit 1 is for, and it is a different fact from exit 3's failed execution |
-| `[verify]` weights missing or non-numeric | Exit **2** at config load. A missing weight is never treated as zero: that would silently disable a check |
+| Stage 05 produced no executed statement | This stage does not run at all. `verify_answer` raises if called anyway, because attaching a confidence to a refusal is the thing this tool exists not to do |
+| Back-translation call fails, or its reply is unparseable | `explanation` is `None`, `error` records why, and **both** verdicts are `error`. Never defaulted to pass |
+| `judge_criterion` returns an unparseable verdict | That verdict is `error` with the raw reason. A judge that cannot be read has not agreed |
+| Judge verdict is fail | Recorded as `fail`; the judge factor falls, and stage 07 decides what that costs |
+| No intent check applies to a question | `intent_fraction` is `None`, and stage 07 drops the factor rather than scoring the absence |
+| An empty result | FLAGged and surfaced in the answer. Never failed |
 
 Escalation path: a verification failure is a question about the question. Read
 the back-translation first — it is the only artefact that says what the SQL
-actually does, in a form a non-SQL reader can dispute — before assuming the
+actually does in a form a non-SQL reader can dispute — before assuming the
 generator was wrong.

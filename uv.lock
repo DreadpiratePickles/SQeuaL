@@ -812,6 +812,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "regression-detect" },
     { name = "sqlglot" },
 ]
@@ -826,6 +827,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "regression-detect", git = "https://github.com/DreadpiratePickles/regress?rev=888a3e3" },
     { name = "sqlglot", specifier = "==30.18.0" },
 ]

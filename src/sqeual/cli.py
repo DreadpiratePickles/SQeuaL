@@ -20,13 +20,21 @@ this tool has a stage that can fail *after* everything about the request was
 found to be correct, and collapsing that into 1 would tell a repair loop to
 rewrite a query that had nothing wrong with it.
 
-**Phase A calls no model.** There is no `ask` command yet, and nothing here
-reads an API key or opens a socket.
+`ask` is the one command that calls a model, and it uses a **different** set of
+four codes — 0 answered, 1 abstained or needs clarification, 2 the guard refused
+the statement after the repair budget was spent, 3 could not run. The distinction
+a caller of `ask` wants first is whether the *model's statement* was the problem
+or whether the *deployment* was, which is not the same question `run` answers.
+`cli_ask.py` states the mapping and `docs/design.md` §37 argues it out.
+
+Every other command still calls no model at all: `db`, `schema`, `guard` and
+`run` read no API key and open no socket.
 """
 
 import argparse
 from collections.abc import Callable, Sequence
 
+from .cli_ask import EXIT_CANNOT_RUN, add_ask_command, command_ask
 from .cli_db import add_db_commands, command_db_build
 from .cli_query import add_query_commands, command_guard, command_run
 from .cli_schema import add_schema_commands, command_schema_show, command_schema_slice
@@ -43,8 +51,9 @@ EXIT_EXECUTION_FAILED = 3
 Echo = Callable[..., None]
 
 DESCRIPTION = (
-    "Text-to-SQL with guardrails. Phase A: build the database, read its schema "
-    "card, guard a statement, and run a guarded one read-only. No model is called."
+    "Text-to-SQL where the model never writes a number. Build the database, read "
+    "its schema card, guard a statement, run a guarded one read-only, or ask a "
+    "question in English and get an answer rendered from the rows."
 )
 
 
@@ -72,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_db_commands(subparsers, common)
     add_schema_commands(subparsers, common)
     add_query_commands(subparsers, common)
+    add_ask_command(subparsers, common)
     return parser
 
 
@@ -86,6 +96,8 @@ def _dispatch(args: argparse.Namespace, config, echo: Echo) -> int:
         return EXIT_OK if command_schema_slice(args, config, echo) else EXIT_FINDING
     if args.command == "guard":
         return EXIT_OK if command_guard(args, config, echo) else EXIT_FINDING
+    if args.command == "ask":
+        return command_ask(args, config, echo)
     return EXIT_OK if command_run(args, config, echo) else EXIT_FINDING
 
 
@@ -95,14 +107,17 @@ def main(argv: Sequence[str] | None = None, echo: Echo = print) -> int:
     args = parser.parse_args(argv)
     if not args.command:
         echo(parser.format_usage().strip())
-        echo("say one of: db build, schema show, schema slice, guard, run")
+        echo("say one of: db build, schema show, schema slice, guard, run, ask")
         return EXIT_BAD_CONFIG
 
     try:
         config = load_config(args.config)
     except ConfigFileError as exc:
         echo(f"configuration error: {exc}")
-        return EXIT_BAD_CONFIG
+        # `ask` renumbers this one. Its 2 means "the guard refused the model's
+        # statement", so a bad config — which is the same fact as a missing key
+        # or a missing database — has to land on its 3 instead of colliding.
+        return EXIT_CANNOT_RUN if args.command == "ask" else EXIT_BAD_CONFIG
 
     try:
         return _dispatch(args, config, echo)
@@ -111,13 +126,21 @@ def main(argv: Sequence[str] | None = None, echo: Echo = print) -> int:
         # already there when a build was asked for. Nothing about the question
         # would change any of those.
         echo(f"cannot start: {exc}")
-        return EXIT_BAD_CONFIG
+        return EXIT_CANNOT_RUN if args.command == "ask" else EXIT_BAD_CONFIG
     except SchemaError as exc:
         echo(f"schema error: {exc}")
-        return EXIT_BAD_CONFIG
+        return EXIT_CANNOT_RUN if args.command == "ask" else EXIT_BAD_CONFIG
     except (ExecutionTimeout, ExecutionError) as exc:
         echo(f"execution failed: {exc}")
         return EXIT_EXECUTION_FAILED
     except ExecuteError as exc:
+        # `DatabaseUnavailableError` lands here: it is a sibling of
+        # `ExecutionError` under `ExecuteError`, not a subclass, so it does not
+        # match the clause above. Stage 05 deliberately does not catch it — a
+        # missing database is a broken deployment, not a bad candidate — which
+        # means it can arrive here mid-generation, after `load_card` already
+        # succeeded. For `ask` that is a 3 and not a 2: telling a caller the
+        # model's statement was refused would send it off to rewrite a query that
+        # had nothing wrong with it.
         echo(f"cannot start: {exc}")
-        return EXIT_BAD_CONFIG
+        return EXIT_CANNOT_RUN if args.command == "ask" else EXIT_BAD_CONFIG

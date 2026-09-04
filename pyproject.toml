@@ -22,6 +22,11 @@ dependencies = [
     # re-runs the suite against it.
     "sqlglot==30.18.0",
     "python-dotenv>=1.0.0",
+    # Reads `src/sqeual/generate/examples.yaml`, the committed few-shot pairs.
+    # Declared rather than relied on transitively: it arrives anyway through
+    # project 1's dependency tree, and a package that imports a module it does
+    # not declare breaks the day that tree changes shape.
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]

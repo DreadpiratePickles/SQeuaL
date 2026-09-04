@@ -5,8 +5,9 @@ other way, with the reason it went this way. Read this before changing
 behaviour: a rule with a reason written down is cheap to revisit, and a rule
 without one gets re-litigated every six months.
 
-Phase A covers stages 01–04. Stages 05–08 are contracts only; §23 says what they
-add and why Phase A's types were shaped for them now rather than later.
+Phase A covers stages 01–04 and §§1–30. Phase B covers stages 05–07 and §§31–42,
+and is where the model finally arrives. Stage 08 is a contract only; §29 says
+what it adds and why Phase A's types were shaped for it now rather than later.
 
 ---
 
@@ -503,7 +504,7 @@ of repair attempts. `GuardPolicy.narrowed_to()` exists in Phase A because that i
 where the slice stops being a suggestion in a prompt and becomes an enforced
 boundary.
 
-**Phase C — stage 06, `verify`.** The guard proves the SQL is *valid*; nothing
+**Phase B — stage 06, `verify`.** The guard proves the SQL is *valid*; nothing
 yet proves it is *relevant*. `SELECT COUNT(*) FROM orders` is a perfectly valid
 answer to "how much did we refund". So the guarded SQL is back-translated into
 English by a model that has not seen the question, and project 1's criterion
@@ -512,14 +513,14 @@ need no model at all. Confidence is **computed** from the agreement count, the
 guard findings, the verifier verdict and the row count, never asked of the model:
 "how confident are you" produces a number with no referent.
 
-**Phase C — stage 07, `answer`.** Where the founding rule stops being a claim and
+**Phase B — stage 07, `answer`.** Where the founding rule stops being a claim and
 becomes code. The number in the sentence is formatted by Python from a
 `ResultSet` cell — money divided from integer cents with an explicit currency,
 dates rendered from ISO text. A model may supply a sentence *template* with named
 placeholders; a placeholder with no matching column is rejected. A truncated
 `ResultSet` must say so, which is why `truncated` is on the type in Phase A.
 
-**Phase C — stage 08, `eval`.** Golden questions with reference SQL, scored on
+**Phase C — stage 08, `eval`.** Still a contract only. Golden questions with reference SQL, scored on
 **execution accuracy** — does the candidate's result set equal the reference's —
 rather than string equality, because there are many correct spellings of one
 query. Alongside it, the metric this whole project exists to move: the
@@ -528,17 +529,399 @@ than after. A `regress` target adapter lets project 1's runner drive SQeuaL as a
 external target with no change to project 1, so SQeuaL's own regressions are
 CI-gated by the tool from project 1.
 
-## 30. What Phase A does not claim
+## 30. What Phase A did not claim, and what Phase B still does not
 
-No model has been called from this repository. There is no `.env` in it and none
-was created. Every figure in these documents comes from deterministic code
-running against a locally generated database.
+At the end of Phase A no model had been called from this repository. That is no
+longer true — Phase B calls one — and the claim it was protecting is unchanged.
 
-In particular: there is **no accuracy number**, because accuracy is a property of
-the model-plus-guard system and no model has run. The guard's *catch rate* on
-hand-written adversarial cases is 100%, and that sentence is worth almost
-nothing — the cases were written by the same person who wrote the guard, which
-is exactly the arrangement §8 of the rulebook exists to forbid. Stage 08 is where
-that number becomes real, measured against golden cases a different pass
-produced, and until then the honest claim is the narrow one: these rules are
-implemented and tested, on these inputs.
+There is **no accuracy number**, because accuracy is a property of the
+model-plus-guard system measured against cases somebody else wrote, and stage 08
+is where that happens. Every figure in these documents still comes from
+deterministic code running against a locally generated database. The guard's
+*catch rate* on hand-written adversarial cases is 100%, and that sentence is
+worth almost nothing — the cases were written by the same pass that wrote the
+guard, which is exactly the arrangement §8 of the rulebook exists to forbid.
+
+Phase B adds two more things nobody should quote. The **judge pass rate** is
+biased upward while `same_family` is true, and every trace records that flag for
+exactly this reason (§33). And a `--dry-run` answer demonstrates the wiring and
+nothing else, which is why the trace labels it (§40).
+
+**One real run exists** and is quoted in the README. It is one question. It shows
+the path works end to end — the model wrote a correct three-table join from the
+sliced card, resolved the period from the injected `as_of`, and all three samples
+agreed on the rows — and it happens to demonstrate §36's dropped-factor rule
+against a real failure, because the provider ran out of capacity before the
+back-translation and the judge factor left the denominator rather than defaulting
+to anything. One question is not an accuracy figure and is not offered as one.
+
+Until stage 08, the honest claim is the narrow one: these rules are implemented
+and tested, on these inputs.
+
+---
+
+# Phase B — stages 05, 06 and 07
+
+Phase A built the deterministic half: the guard that refuses bad SQL and the
+sandbox that runs good SQL. Phase B is the model arriving into a system that
+already refuses it.
+
+## 31. The model never writes a number, implemented literally
+
+Phase A stated the rule. Phase B is where it stops being a claim about prompt
+discipline and becomes a property of the code, and the property is enforced by a
+test rather than by a convention:
+
+```
+tests/test_pipeline.py::test_every_digit_in_the_prose_traces_to_something_code_produced
+```
+
+It takes the rendered answer, strips the fenced SQL block, finds every maximal
+digit run in what is left, and requires each one to trace to a rendered cell, a
+row count, a date resolved from `as_of`, or the confidence arithmetic. A digit
+belonging to none of those means a model wrote a figure.
+
+**Two things are excluded, and the exclusions are the honest part rather than a
+loophole.** The fenced SQL block and the back-translation blockquote are both
+written by a model, and both appear under headings that say so — "the query that
+ran", "what the statement says it does". They are **evidence**, offered so a
+reader can check the figures rather than take them.
+
+Neither can carry the answer, and that is what makes the exclusion safe rather
+than convenient. The SQL block is separately asserted byte-identical to
+`normalised_sql`, so a reader can paste it and get the same rows. And the
+back-translation was produced by a model that was **never shown the result** —
+`build_explain_user_message` takes the statement and the schema and nothing else,
+and a test asserts the result value is absent from that message. A model that has
+not been shown a number cannot copy one, cannot round one, and cannot average two
+of them. The only figures a back-translation can contain are the ones already
+visible in the SQL beside it.
+
+What is left after removing those two is the part that speaks in the tool's own
+voice, and every digit in it is code's.
+
+Everything else falls out of that. `format.py` is the only path from a value to a
+rendered figure. `*_cents` is divided by 100 there and never in the SQL, because
+a statement that already divided has thrown away the exact integer it was given —
+and the exactness is the whole reason money is an integer count of cents. `NULL`
+renders as "no value recorded" and never as 0, because a NULL sum means nothing
+matched and a zero means something matched and totalled nothing.
+
+Money rounds `ROUND_HALF_UP` rather than with Python's `round`, which rounds half
+to **even**: `round(1250.5)` is 1250 and `round(1251.5)` is 1252. That is a
+defensible statistical convention and a genuine surprise in a money column, and
+it was found by a test rather than by reading.
+
+## 32. Why `k`-sampling agreement is a confidence factor and not the truth
+
+The tempting design is a vote: sample `k` times, execute each candidate, and
+return whatever the plurality agrees on. It is tempting because it looks like an
+ensemble, and ensembles work when the members are independent.
+
+These are not independent. Same model, same prompt, same schema, same
+temperature within a hair — `k` samples of one model are `k` draws from one
+distribution, and a distribution that is wrong in the middle is wrong `k` times
+in the same way. A plurality among them launders a systematic error into
+certainty, and the more samples you take the more certain the wrong answer looks.
+
+So the **primary** answers. It is the first sample, at temperature 0, and its
+statement is the one that runs. The other `k-1` are at `sample_temperature` and
+exist only to agree or disagree, and their agreement is one of four weighted
+factors. Three samples agreeing raises the score; it never decides the answer.
+
+Two consequences follow, and both are asserted:
+
+Agreement is measured on **executed rows**, not on SQL text. Two correct queries
+can be spelled differently and would never agree on their text; two identical
+wrong queries agree perfectly. Text comparison gets the sign wrong in both
+directions.
+
+Column **labels** are canonicalised and recorded but do not decide equality.
+`COUNT(*) AS n` and `COUNT(*) AS total` are one answer with two names, and
+calling them a disagreement would report low confidence on a question two samples
+got right. This is a deliberate departure from the letter of "canonicalise the
+column names and compare": lowercasing the labels is what makes them comparable
+in the trace, and comparing on rows is what makes agreement mean something.
+
+At `k = 1` the fraction is 1.0 by construction, so the factor is **dropped** from
+the confidence average rather than counted. A tautology is not evidence, and
+counting it would let `--k 1` buy confidence it did not earn.
+
+## 33. Why the judge sees an explanation rather than the SQL
+
+The obvious verifier shows one model the question and the SQL and asks "does this
+answer that". It fails, and it fails silently, which is the worst combination: a
+model shown both reads the question, restates it, and agrees with itself.
+
+So the check is two steps and the first one is **blind**. A model is shown the
+statement and the schema and never the question, and asked what the statement
+does in plain English. Then project 1's criterion judge grades that explanation
+against the original question. `tests/test_verify_backtranslation.py` asserts the
+question's phrases are absent from the explain message and that the explain
+system prompt is byte-identical to the committed file — blindness is exactly the
+kind of property that decays the first time somebody "improves" a prompt, so it
+is pinned rather than trusted.
+
+There are two reasons this is better than showing the judge the SQL directly, and
+the second is the one that matters.
+
+**LLMs judge English better than they read SQL.** Asking a model whether a
+five-table join with three date predicates and a `GROUP BY` matches a sentence is
+asking it to do symbolic reasoning about scope resolution. Asking it whether two
+English sentences describe the same measurement is asking it to do the thing it
+is actually good at.
+
+**The explanation is itself a hallucination check.** A model made to describe its
+own statement in English describes what it *wrote*, not what it *meant*. The gap
+between those two is precisely the failure this stage is hunting, and the
+back-translation is the only artefact in the system that makes it visible to
+somebody who cannot read SQL. That is why a refusal prints it.
+
+Two criteria, not one, and they point in opposite directions: "the described
+query answers the question" and "the described query does not compute something
+the question did not ask for". One criterion catches a query that answers the
+wrong question and misses one that answers the right question *and* three others.
+
+**A judge error is not a fail and is never a pass.** An unparseable verdict or an
+unreachable provider is recorded as `error` and the whole judge factor is dropped
+from the average. Counting it as agreement would let a broken judge raise every
+score in the system; counting it as disagreement would let one lower every score.
+It has said nothing, and the honest thing to do with nothing is not to count it.
+
+The self-preference problem is live, is not solved, and is recorded on **every**
+run rather than documented once. `same_family` in each trace is what stops a
+later analysis of pass rates from silently mixing biased and unbiased verdicts.
+
+## 34. Why `as_of` is injected, and why the model is told it *and* checked
+
+"Last month" is not a fact about a question. It is a fact about a question and a
+date, and a tool that resolved it against `today` would give two different
+answers to the same question a week apart, neither reproducible and neither
+wrong.
+
+So `[time] as_of` is committed, and it does two independent jobs.
+
+It goes into the **prompt**, because a model that has to guess the date will
+guess, and a query filtered on the wrong month is a wrong answer that looks
+exactly like a right one.
+
+And code resolves the same phrase into the same window **independently**, in
+`generate/timewindow.py`, so stage 06 can check the literals the model actually
+wrote against it. Telling a model the date is a prompt; checking what it did with
+the date is a control. The distinction is §2's, and this is the second place in
+the system where it bites.
+
+The check tests **consistency**, not equality, and the difference is the whole
+usability of it. A correct July query may write `BETWEEN '2026-07-01' AND
+'2026-07-31'`, or `>= '2026-07-01' AND < '2026-08-01'`, or `STRFTIME('%Y-%m', d)
+= '2026-07'`. None of those contains both endpoints, and an equality check would
+report a mismatch on two of the three. So a literal passes when it *could* belong
+to a correct query for the window and fails only when it could not.
+
+One limitation is stated and pinned by a test rather than discovered: `2026-08-01`
+is both the day after July and the first day of August, and nothing in the
+literal says which was meant. It is accepted on its own. What catches the
+told-July-wrote-August case is the *other* literal, `2026-08-31`, which cannot
+belong to a July query under any spelling.
+
+## 35. Refusing is a feature
+
+`ABSTAIN` is a first-class outcome with its own document and its own exit code,
+and below the threshold the answer shows **no figures at all**.
+
+Not a number with a hedge attached. A hedged number is repeated without its hedge
+in the first email that quotes it, and that is how a low-confidence guess becomes
+a figure in a board pack — the hedge lives in the sentence and the number lives
+in everybody's memory. So the figure is not rendered, `Answer.cells` is empty,
+and the test asserts no result cell appears as a whole numeric token anywhere in
+the prose.
+
+What a refusal *does* show is everything needed to argue with it: the
+back-translation, every check with its evidence, the score factor by factor with
+its weight and contribution, and the statement it was about to run. A human who
+disagrees can paste the SQL and get the number themselves. That is a better
+outcome than a hedge, because the person who runs it has decided to.
+
+The same shape covers the two other refusals. A question that matched no table
+gets a clarifying question built by code, naming the tables that exist, **without
+calling a model** — a slicer that matched nothing has no business spending money
+to find out it still matches nothing. And a model that sets
+`clarification_needed` gets its question carried through verbatim, or one built
+for it if it set the flag and gave no question.
+
+## 36. Confidence is computed, and an inapplicable factor is dropped
+
+A model asked "how confident are you, 0 to 1" produces a number with no referent.
+It is calibrated against nothing, it can be audited by nobody, and it will say
+0.95 about a fabricated column as readily as about a correct one.
+
+So the score is arithmetic over four things that were counted, weighted by
+`[confidence]`, and every factor's weight and contribution is written into the
+answer — a 0.43 that reads as a sentence rather than arriving as a number.
+
+The design decision worth arguing with is what happens to a factor with nothing
+to say. It is **dropped from both halves of the fraction**, and it is neither
+zero nor one:
+
+- a question with no time phrase gave the time check nothing to test, and scoring
+  that as evidence *for* the statement would reward a question for being vague;
+- scoring it *against* would punish the same question for the same vagueness;
+- a judge whose verdict could not be read has likewise said nothing.
+
+`None` and `0.0` are different facts and the difference reaches the score. The
+one place they converge is a run where **nothing** applied: that scores 0.0 and
+abstains, because no evidence is not good evidence.
+
+Nothing in the calculation can raise a score. Every factor is a fraction in
+[0, 1] and `repair_penalty` only subtracts, so there is no path by which a
+model's opinion promotes a weak answer. Weights and thresholds are integers in
+hundredths rather than floats, because a threshold is a line somebody argues
+about in a pull request and `0.55` invites a diff reading `0.5500000001`. The
+division by 100 happens once, and the level is read from the *rounded* score so
+the number a user sees and the level they see cannot disagree.
+
+## 37. Why `ask` renumbers exit codes 2 and 3
+
+Phase A's `run` uses 2 for "the run never started" and 3 for "execution failed".
+`ask` uses 2 for "the guard refused the statement, or the model produced nothing
+readable — nothing ran" and 3 for "could not run at all".
+
+This is the one place in the repository where the vocabulary shifts, and it is
+deliberate rather than an oversight. What a caller of `run` wants to know is
+whether the *SQL* was bad (1) or the *database* failed (3); it wrote the SQL
+itself, so "never started" is a configuration problem and gets 2. What a caller of `ask`
+wants to know first is different: it did not write the SQL, so the useful split
+is whether **the model's statement** was the problem (2 — retry, maybe with a
+better prompt) or **the deployment** was (3 — no key, no database, a provider
+that is down; retrying the question changes nothing).
+
+`cli.py` maps a configuration error and a missing database to 3 when the command
+is `ask`, and `tests/test_cli_ask.py` pins both vocabularies so that a caller
+assuming one held everywhere fails a test rather than a pipeline.
+
+## 38. Guard-feedback repair, bounded at one, and only for the primary
+
+A guard failure on the primary candidate feeds the **codes** back to the model
+once. The codes are the payload — `unknown_column`, `ambiguous_column`,
+`function_not_allowed` — because a model repairs better against a named finding
+than against a paragraph, and the detail follows because it names what *does*
+exist, which is what turns the next attempt from a guess into a correction.
+That is exactly why §19 gives `ambiguous_column` its own code: telling a model to
+qualify a column it can see is a different instruction from telling it the column
+is imaginary.
+
+Three limits, each with a reason:
+
+**One repair.** There is no branch that resets the counter. An unbounded repair
+loop is a bill with no upper limit and a run that never terminates, and a model
+that got it wrong twice with the finding in front of it is not going to get it
+right on the fourth.
+
+**Only the primary.** The other samples exist to agree or disagree. Repairing
+them would spend money buying agreement, which is the one thing agreement must
+not be purchasable with.
+
+**A parse failure is never repaired in place.** A reply that is not the JSON
+object is a discarded candidate, full stop. Pulling a fenced block out of prose
+with a regular expression works until the model writes two blocks — and then
+something has quietly chosen which statement to run, and nobody knows which.
+
+## 39. Why the few-shot examples are guard-checked by the test suite
+
+`generate/examples.yaml` holds six committed question/statement pairs, and
+`tests/test_generate_prompt.py` guards every one of them against the **live**
+schema card with the real policy.
+
+An unvalidated few-shot example is a hallucination with authority. The model
+copies the shape it is shown, so an example naming a column this database does
+not have would teach the model to name it — six times, with the credibility of
+being the thing the prompt says to imitate. The test is one line per example and
+it makes the examples a checked artefact rather than a decorative one.
+
+The same test asserts no example divides money into a currency, because that is
+the behaviour the dialect notes ask for and an example that contradicted the
+rules would win.
+
+## 40. The dry run is scaffolding, and says so
+
+`--dry-run` swaps in a provider that reads the system prompt it was handed, picks
+one of four roles, and returns a scripted reply. It exists so the whole pipeline —
+slice, generate, guard, execute, verify, judge, render, record — runs offline with
+no key and produces the same bytes every time, which is what makes the end-to-end
+test possible.
+
+Three properties keep it honest.
+
+It is **allowed to know things a model would have to infer**: it resolves the time
+window with the same code stage 06 checks against, so a dry run produces a
+coherent answer rather than a coherent-looking failure. That is legitimate for
+scaffolding and would be cheating for a model.
+
+It **reports zero tokens**. A fake consumed nothing, and a plausible token count
+would put a fabricated number in the one column of the trace that is about money.
+
+And the trace records `dry_run: true` and `model_id: role-aware-fake`, so a
+`--dry-run` answer can never later be mistaken for evidence about whether a model
+can write SQL. It demonstrates the wiring. It demonstrates nothing else.
+
+The role markers are substrings of the real prompts, and a test asserts each
+marker is actually in the file it identifies. A coupling like that is fine as
+long as it is pinned and lethal if it is not: without the test, the day somebody
+rewords a prompt is the day the dry run silently answers every call the same way.
+
+## 41. Cost is in micro-USD, and zero means unpriced
+
+A micro-USD is a millionth of a dollar. Token prices are quoted at four or five
+significant figures, so cents are far too coarse for one call and a binary float
+is the wrong shape for money at any scale. Every leg is priced separately and
+rounds **up**, in integer arithmetic, because truncating a tenth of a micro-USD
+would make a million one-token calls free.
+
+`[cost]` ships with both prices at **zero**, and the trace carries `priced:
+false` beside the amount. Nobody in this repository has entered a vendor tariff,
+and inventing one would put a made-up number in the money column of every run.
+A reader who took that 0 for a bill of nothing would be reading a figure this
+repository never claimed — which is the same failure mode as every other number
+in this project, and gets the same treatment.
+
+## 42. Three ways a first pass got the grounding check wrong
+
+The grounding check is the only thing standing between `[answer] llm_phrasing`
+and a model writing a figure into an answer, so it is worth recording exactly how
+a first implementation of it failed. All three failures were found by review, all
+three were reproducible, and all three are now pinned by tests.
+
+**A date pre-authorised every small integer.** The window endpoints are handed to
+the check as `extra` grounds, and the tokeniser split `2026-08-31` into `2026`,
+`08` and `31` — three separate allowed values, on **every single run**, because
+`as_of` is always present. So any invented count between 1 and 31 passed. A small
+invented count is precisely what a hallucinating phraser produces on a database of
+orders and refunds, which made this the worst of the three. The fix is that a date
+is now one token on both sides of the comparison: it grounds itself and its
+*year*, because "in July 2026" is how anybody writes a period, and never its month
+or day.
+
+**A percentage was just a number.** `%` was stripped alongside the currency
+symbols, so `42%` compared equal to a cell holding `42` — and a fabricated growth
+rate passed whenever the result happened to contain the same digits anywhere. The
+prompt says "do not compute a percentage"; the code did not enforce it. Now a
+percent token can only be grounded by a percent value, and no cell in this schema
+renders as one, so a rate is always rejected. That is the intended outcome: the
+prompt asks, and this is what makes it a rule.
+
+**A sign was not part of a value.** A cell of `-150` grounded the claim "150", so
+a model could turn a loss into a gain and the check would nod.
+
+The general lesson is the one §16 already learned in a different register:
+**normalisation is not identity**. Every step that makes two spellings comparable
+also makes two *different things* comparable, and each one has to be justified
+separately. `1,250.00` and `1250` are the same number. `42%` and `42` are not.
+`-150` and `150` are not. `2026-08-31` and `31` are not.
+
+One limitation survives and is stated rather than hidden: grounding checks that a
+value is **present** in the result, not that it is attributed to the right row. On
+a grouped result, "Munich had 120 orders" passes when 120 is Berlin's figure,
+because 120 is genuinely in a cell. Catching that would mean parsing the sentence,
+which is a much weaker kind of check than counting tokens. The mitigation is
+structural: the table sits directly under the sentence, rendered by code, where
+the reader can see which row the number belongs to.

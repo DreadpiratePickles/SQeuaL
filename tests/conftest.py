@@ -81,3 +81,72 @@ def session_card(session_db):
     from sqeual.schema.card import read_schema_card
 
     return read_schema_card(session_db)
+
+
+# --- Phase B helpers -------------------------------------------------------
+#
+# A scripted provider rather than project 1's `FakeProvider`, for two reasons: it
+# implements the *metered* seam Phase B depends on, and it raises when its script
+# runs out instead of cycling. A cycling fake makes a test that expected three
+# calls pass after the code made four, which is exactly the bug the repair-ceiling
+# tests exist to catch.
+
+
+def phase_b_config(directory: Path, db_path: Path, extra=()) -> SqeualConfig:
+    """The committed configuration, pointed at an already-built database."""
+    return load_config(cli_config(directory, db_path, extra))
+
+
+class ScriptedProvider:
+    """A `MeteredProvider` returning canned replies in order, then refusing."""
+
+    def __init__(self, replies, *, model_id: str = "scripted") -> None:
+        self.model_id = model_id
+        self._replies = list(replies)
+        self.calls: list[dict] = []
+
+    def complete(self, *, system: str, user: str, temperature: float):
+        from sqeual.providers import Completion
+
+        if len(self.calls) >= len(self._replies):
+            raise AssertionError(
+                f"the provider was called {len(self.calls) + 1} times but only "
+                f"{len(self._replies)} replies were scripted"
+            )
+        reply = self._replies[len(self.calls)]
+        self.calls.append({"system": system, "user": user, "temperature": temperature})
+        if isinstance(reply, Exception):
+            raise reply
+        return Completion(
+            text=reply,
+            input_tokens=10,
+            output_tokens=5,
+            model_id=self.model_id,
+            latency_ms=1,
+        )
+
+
+def proposal_json(sql: str, **overrides) -> str:
+    """A well-formed generation reply carrying `sql`."""
+    import json
+
+    payload = {
+        "sql": sql,
+        "tables": [],
+        "assumptions": [],
+        "clarification_needed": False,
+        "clarifying_question": None,
+    }
+    return json.dumps({**payload, **overrides})
+
+
+def verdict_json(passed: bool, reason: str = "scripted") -> str:
+    import json
+
+    return json.dumps({"reason": reason, "passed": passed})
+
+
+def explanation_json(explanation: str) -> str:
+    import json
+
+    return json.dumps({"explanation": explanation})

@@ -1,0 +1,52 @@
+# Worked examples shown to the model, question next to statement.
+#
+# Committed, and checked by the test suite against the *real* schema card: every
+# statement here is guarded exactly as a model's would be, and a statement that
+# named a column this database does not have would fail the suite rather than
+# teach the model to name it. An unvalidated few-shot example is a hallucination
+# with authority — the model copies its shape, and a wrong shape copied six times
+# is worse than no example at all.
+#
+# Chosen to cover the six things this schema's questions actually need: a bare
+# count over a date range, a money sum, a grouped top-N with a join, an average,
+# a group-by with a filter, and a superlative with no period at all. The dates
+# are literal because that is what the model must learn to write — a relative
+# phrase in an example teaches it to leave one in the SQL.
+#
+# Every money column is `*_cents`, and none of these divides by 100. That is the
+# point: the statement returns an integer count of cents and code renders the
+# currency, so a model that never divides can never round.
+
+- question: how many tickets were opened in July 2026
+  sql: >-
+    SELECT COUNT(*) AS ticket_count FROM tickets
+    WHERE opened_date >= '2026-07-01' AND opened_date <= '2026-07-31'
+
+- question: how much did we refund in June 2026
+  sql: >-
+    SELECT SUM(r.amount_cents) AS refunded_cents FROM refunds AS r
+    WHERE r.refund_date >= '2026-06-01' AND r.refund_date <= '2026-06-30'
+
+- question: which five cities placed the most orders in July 2026
+  sql: >-
+    SELECT c.city AS city, COUNT(o.id) AS order_count
+    FROM orders AS o JOIN customers AS c ON c.id = o.customer_id
+    WHERE o.order_date >= '2026-07-01' AND o.order_date <= '2026-07-31'
+    GROUP BY c.city ORDER BY COUNT(o.id) DESC LIMIT 5
+
+- question: what was the average order total in 2026
+  sql: >-
+    SELECT ROUND(AVG(total_cents), 2) AS average_order_cents FROM orders
+    WHERE order_date >= '2026-01-01' AND order_date <= '2026-12-31'
+
+- question: how many open tickets does each agent have
+  sql: >-
+    SELECT a.name AS agent_name, COUNT(t.id) AS open_ticket_count
+    FROM tickets AS t JOIN agents AS a ON a.id = t.agent_id
+    WHERE t.status = 'open'
+    GROUP BY a.name ORDER BY COUNT(t.id) DESC
+
+- question: what are the five most expensive products
+  sql: >-
+    SELECT name AS product_name, unit_price_cents FROM products
+    ORDER BY unit_price_cents DESC LIMIT 5
