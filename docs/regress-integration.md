@@ -213,10 +213,24 @@ the prompt path from the flag rather than from `load_generate_prompt()`, and the
 serving path would emit one event per question. The prompt is already hashed into
 the trace, which is the part that is usually missing.
 
+The first live evaluation is a warning about step 4 specifically, and it is worth
+carrying across. The one question SQeuaL got dangerously wrong was caught by the
+**judge** and by nothing else — every deterministic check passed, because the
+statement was well formed and used real columns (`docs/design.md` §53). A rollout
+guard built only on deterministic signals would have waved that prompt straight
+through to 100%.
+
 What SQeuaL contributes back to that loop is the thing a summariser cannot: a
 **machine-checkable** quality signal. Project 9's monitor grades text with a
 model. Here, the guard's `unknown_column` finding and stage 08's execution
 accuracy are both facts, decided by a parser and a row comparison, with no
 opinion anywhere in them. A rollout whose guard is "did the candidate prompt
-start producing more hallucinated columns" needs no judge at all — and that is
-the strongest version of the quality gate in the whole series.
+start producing more `unknown_column` findings" needs no judge at all, and that
+is the strongest quality gate anywhere in the series — because it cannot be
+argued with.
+
+It is also, on the evidence of the first live run, not sufficient on its own.
+Deterministic signals catch the prompt change that starts inventing columns; they
+are blind to the one that starts renaming real ones. A rollout guard for this
+feature wants both, and should say which of the two tripped, because they call
+for different fixes.
