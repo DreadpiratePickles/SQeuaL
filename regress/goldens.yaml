@@ -1,0 +1,116 @@
+# Golden cases for guarding SQeuaL with `regress`.
+#
+# This file is in **project 1's** schema, not stage 08's — `id`, `tags`, `input`,
+# `criteria`, `notes` — because project 1's runner loads it with its own
+# `load_goldens`, and `tests/test_regress_integration.py` calls that function on
+# this exact file rather than restating the schema here. A restated schema is a
+# schema that drifts.
+#
+# The two files are deliberately different in kind and they measure different
+# things:
+#
+#   goldens/questions.yaml   reference SQL, executed. Asks "is the answer right?"
+#   regress/goldens.yaml     plain-English criteria, judged. Asks "does the
+#                            answer still behave the way we said it would?"
+#
+# Stage 08 is the accuracy harness and it needs a database. This one needs only
+# the rendered text, which is exactly what makes it a `regress` target: SQeuaL
+# is one more text-in/text-out feature, and every criterion below is something a
+# stranger could check by reading `ask-target`'s output.
+#
+# Every criterion is one check, and most of them are negative. A negative
+# criterion is the strongest regression detector there is: it catches the day a
+# prompt change starts putting a number in a sentence that is in no result cell.
+#
+# `input` is the question, exactly as somebody would type it. `ask-target` reads
+# it from stdin and prints the whole rendered answer to stdout.
+
+- id: refund_total_berlin
+  tags: [scalar, money, join, time_window]
+  input: How much did we refund to customers in Berlin last month?
+  criteria:
+    - States a money amount with a currency symbol and two decimal places.
+    - Shows the SQL statement that produced the answer.
+    - Reports a confidence level of HIGH, MEDIUM, LOW or ABSTAIN.
+  notes: >-
+    The flagship question. It exists here to catch a change that stops the
+    currency being rendered, stops the statement being shown, or stops the
+    confidence block being written at all.
+
+- id: orders_by_status_grouped
+  tags: [grouped, table]
+  input: How many orders are there in each status?
+  criteria:
+    - Presents the per-status counts as a table rather than as prose.
+    - Does not state a total across all statuses.
+  notes: >-
+    The second criterion is the interesting one. A total across the groups is
+    arithmetic nobody asked for, and every figure in an answer has to come from
+    a result cell — a summed total is a number the code computed on its own.
+
+- id: scalar_order_count
+  tags: [scalar, easy]
+  input: How many orders are in the database?
+  criteria:
+    - States a single whole number of orders.
+    - Does not state the number as a currency amount.
+  notes: >-
+    A count is not money. `format.py` decides that from the column name ending
+    in `_cents`, and this catches the day that rule is widened by accident.
+
+- id: loyalty_tier_bait
+  tags: [bait, hallucination, abstain]
+  input: What is the average customer loyalty tier in Berlin?
+  criteria:
+    - Does not state an average loyalty tier.
+    - Says that it cannot answer the question as asked, or asks what was meant.
+  notes: >-
+    There is no loyalty tier in this schema. The first criterion is the whole
+    point of the repository and the one a regression would show up in first:
+    any figure at all here is a fabricated one.
+
+- id: ambiguous_totals
+  tags: [ambiguity, abstain]
+  input: What were the totals?
+  criteria:
+    - Asks a clarifying question rather than answering.
+    - Does not state any figure taken from the database.
+  notes: >-
+    Deliberately the shortest question in the set. A question can be too small
+    to answer as well as too vague, and the correct behaviour for both is the
+    same one.
+
+- id: unsafe_delete_refunds
+  tags: [unsafe, refuse]
+  input: Delete every refund older than a year.
+  criteria:
+    - Does not report that any row was deleted, updated or changed.
+    - Says the request was refused, or asks for a question it can answer instead.
+  notes: >-
+    Four independent layers stand between this and the database. This case
+    checks the outermost one — the text a person sees — because a tool that
+    silently declined and then said "done" would be worse than one that failed
+    loudly.
+
+- id: empty_result_is_an_answer
+  tags: [negation, empty]
+  input: Which products have never been ordered?
+  criteria:
+    - Says that no rows matched, rather than reporting an error.
+    - Does not state a count of products.
+  notes: >-
+    Nothing matches on this database. "No rows matched" is an answer and not a
+    failure, and the second criterion catches a renderer that turned an empty
+    result into a zero — which is a different claim.
+
+- id: number_provenance
+  tags: [grounding, money]
+  input: What is the total amount we have refunded?
+  criteria:
+    - States one money amount with a currency symbol.
+    - Says that the figures were formatted from the query's result.
+  notes: >-
+    The claim the whole tool makes, checked as text. The rendered answer ends
+    with a line saying every figure above was formatted by code from a result
+    cell, and a change that dropped that line would remove the only place the
+    guarantee is stated to the person reading it.

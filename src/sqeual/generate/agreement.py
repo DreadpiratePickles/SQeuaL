@@ -72,6 +72,19 @@ def _sort_key(row: Sequence[object]) -> tuple:
     return tuple((type(value).__name__, "" if value is None else str(value)) for value in row)
 
 
+def rounded_rows(result: ResultSet, *, float_places: int) -> tuple[tuple, ...]:
+    """The rows with floats rounded and **nothing reordered**.
+
+    Split out of `canonicalise` for stage 08, which needs both forms: a question
+    that asked for a ranking is scored on the sequence, and everything else on
+    the multiset. Sorting is the only difference between them, so it happens in
+    exactly one place and neither caller can round differently from the other.
+    """
+    return tuple(
+        tuple(_canonical_value(value, float_places) for value in row) for row in result.rows
+    )
+
+
 def canonicalise(result: ResultSet, *, float_places: int) -> CanonicalResult:
     """Reduce a `ResultSet` to the form agreement is measured in.
 
@@ -80,9 +93,7 @@ def canonicalise(result: ResultSet, *, float_places: int) -> CanonicalResult:
         float_places: `[verify] float_places`, the decimal places floats are
             rounded to before comparison.
     """
-    rows = tuple(
-        tuple(_canonical_value(value, float_places) for value in row) for row in result.rows
-    )
+    rows = rounded_rows(result, float_places=float_places)
     return CanonicalResult(
         columns=tuple(column.lower() for column in result.columns),
         rows=tuple(sorted(rows, key=_sort_key)),

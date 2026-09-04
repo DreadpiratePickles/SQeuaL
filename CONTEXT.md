@@ -24,7 +24,7 @@ back. When that confidence is too low it refuses, and shows the query instead.
 | `05_generate` | Question → candidate SQL as strict JSON, guarded against a policy narrowed to the slice, repaired once from the guard's own findings, and k-sampled with agreement measured on executed rows | `stages/05_generate/CONTEXT.md`, `src/sqeual/generate/` | Yes — Phase B |
 | `06_verify` | Does the guarded SQL answer the question that was *asked*? Eight deterministic checks, plus a back-translation produced blind and graded by project 1's criterion judge | `stages/06_verify/CONTEXT.md`, `src/sqeual/verify/` | Yes — Phase B |
 | `07_answer` | Render the answer from the rows, in code, with a confidence computed from evidence — or refuse and show no figures at all | `stages/07_answer/CONTEXT.md`, `src/sqeual/answer/` | Yes — Phase B |
-| `08_eval` | Golden questions with reference SQL, execution accuracy, guard-catch rate, and a `regress` target adapter so SQeuaL's own regressions are CI-gated | `stages/08_eval/CONTEXT.md` | **PLANNED — Phase C** |
+| `08_eval` | Forty golden questions — twenty-six with reference SQL executed at eval time, fourteen with no answer at all — scored on execution accuracy, on what the tool does with a trap, and on whether its confidence separates right from wrong. Plus `ask-target`, so project 1 drives SQeuaL as an external target | `stages/08_eval/CONTEXT.md`, `src/sqeual/eval/` | Yes — Phase C |
 
 **No stage in Phase A calls a model.** Nothing in `db`, `schema`, `guard` or
 `execute` reads an API key, opens a socket, or imports a vendor SDK. That is not
@@ -32,6 +32,9 @@ an accident of scheduling — it is the point. Everything a text-to-SQL system
 needs in order to be *safe* is deterministic, and building it first meant the
 model, when it arrived in Phase B, arrived into a system that already refuses bad
 SQL.
+
+Stage 08 calls one, but only through the same pipeline `ask` uses: it is a
+harness, and every judgement in it is arithmetic over things that were counted.
 
 `src/sqeual/providers/` is the only package that knows a model exists, and
 `providers/gemini.py` is the only module in the repository that imports a vendor
@@ -57,6 +60,13 @@ Stage 07 writes `runs/<ts>/`, which is gitignored.
 | `src/sqeual/verify/prompts/explain_v1.md` | 3 | The back-translation prompt. It is never shown the question, and a test asserts it |
 | `src/sqeual/answer/prompts/phrase_v1.md` | 3 | The optional phrasing prompt. Off by default; every number it writes is checked against the cells |
 | `runs/` | 4 | One directory per `ask`: `trace.json` and `answer.md`. **Gitignored** — it holds a question somebody asked and the rows that came back |
+| `goldens/questions.yaml` | 3 | Forty golden questions. Twenty-six carry **reference SQL**, executed at eval time; fourteen are traps and carry none, because a question about a column that does not exist has no correct query |
+| `goldens/README.md` | 3 | The rules a golden question has to satisfy, and the two traps found writing them |
+| `regress/goldens.yaml` | 3 | Eight cases in **project 1's** schema — plain-English criteria, judged — so `regress` can guard this repository pre-merge |
+| `regress/regression.toml` | 3 | Project 1's committed thresholds unchanged, plus a `[target] kind = "command"` pointing at `sqeual ask-target` |
+| `docs/regress-integration.md` | 3 | How the seam works, why it is a subprocess, and how project 9 would roll out a change to `generate_v1.md` |
+| `docs/examples/*.live.md`, `*.synthetic.md` | 4 | Committed evidence from real and offline runs. Every one carries `LIVE` or `SYNTHETIC` on line 1 |
+| `runs/eval/` | 4 | One directory per `eval`: `results.jsonl`, `eval.json`, `eval.md`, `calibration.md`. **Gitignored** for the same reason |
 
 ## Reused from project 1
 
@@ -75,9 +85,16 @@ branch that moves underneath makes an answer's provenance a guess. Phase B calls
 - **the retry policy** — `providers.gemini`'s attempt budget, backoff constants
   and retryable status codes, imported by `providers/gemini.py` rather than
   restated, so the two projects cannot drift on what a transient failure is;
-- **the statistics** — `compare.fisher_exact_one_sided` and
-  `compare.wilson_interval`, which stage 08 will need to say whether an accuracy
-  drop is a regression or noise. Not called yet.
+- **the Wilson interval** — `compare.wilson_interval`, which stage 08 puts on
+  every rate it reports. `compare.fisher_exact_one_sided` is still not called
+  from here: deciding whether a drop between two runs is a regression is project
+  1's job, and stage 08's job is to produce one run's numbers honestly;
+- **the golden schema** — `goldens.load_goldens`, called by
+  `tests/test_regress_integration.py` on `regress/goldens.yaml` rather than
+  restating project 1's schema here. A restated schema is a schema that drifts;
+- **the target seam** — `target/adapters/base.Target` and
+  `target/adapters/factory.load_target`, both called by the same test against the
+  committed `[target]` section.
 
 What could **not** be reused is the call itself: project 1's `Provider` returns a
 string, and a trace priced from character counts would carry a guess in the money
@@ -86,9 +103,11 @@ text and re-exports project 1's typed errors unchanged, and `TextProviderView`
 narrows it back so `judge_criterion` can be called without dropping the usage it
 never asked for.
 
-Stage 08 additionally implements project 1's `Target` protocol
-(`target/adapters/base.py`), so project 1's existing runner can drive SQeuaL as
-an external target with no change to project 1 at all.
+Stage 08 satisfies project 1's `Target` protocol (`target/adapters/base.py`)
+through `sqeual ask-target` — one question on stdin, the rendered answer on
+stdout — so project 1's existing `CommandTarget` drives SQeuaL with **no change
+to project 1 at all** and no import of project 1 in the serving path.
+`docs/regress-integration.md` sets out the flow.
 
 This project does not depend on projects 2 or 9 and copies nothing from them.
 
@@ -144,6 +163,19 @@ This project does not depend on projects 2 or 9 and copies nothing from them.
   rather than scored as a pass.
 - **A judge that could not be read has not agreed, and has not disagreed.** An
   unparseable verdict is an `error` and contributes nothing.
+- **A golden question carries reference SQL, never a reference number.** The
+  expected answer is executed at eval time against the same database, so it is
+  derived on every run rather than typed once and never checked again. A trap
+  carries no reference SQL at all, and the loader refuses one that does.
+- **The dangerous direction is printed first.** A question with no answer,
+  answered with figures, leads every page stage 08 writes — above the accuracy,
+  above the traps, above everything. Every other failure costs a re-run; that one
+  puts a number that means nothing in front of somebody who will quote it.
+- **Accuracy is never reported without the refusal rate beside it.** A system can
+  buy any accuracy figure by refusing more.
+- **A synthetic result says so on line 1.** Every file a `--dry-run` writes
+  carries `SYNTHETIC`; every file a real run writes carries `LIVE` with its date,
+  its model, its counts and what failed.
 - Model identifiers live in `config.py` and nowhere else. Secrets live in a
   `.env` that is gitignored and read only by `providers/gemini.py`, through
   project 1's `GEMINI_API_KEY`.

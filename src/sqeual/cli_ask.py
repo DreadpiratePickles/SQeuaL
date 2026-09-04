@@ -85,7 +85,7 @@ def add_ask_command(subparsers: argparse._SubParsersAction, common) -> None:
     )
 
 
-def _build_provider(args: argparse.Namespace, config):
+def build_provider(args: argparse.Namespace, config):
     """The scripted fake, or the metered Gemini adapter.
 
     The vendor module is imported lazily so that `--dry-run` needs neither the
@@ -99,7 +99,7 @@ def _build_provider(args: argparse.Namespace, config):
     return metered_provider_from_env(model_id_for_ref(config.models.sql_model_ref))
 
 
-def _judge_provider(args: argparse.Namespace, config, provider):
+def judge_provider_for(args: argparse.Namespace, config, provider):
     """A second provider only when the judge is configured to a different model.
 
     When the two ids match there is one provider and `same_family` records that
@@ -128,14 +128,14 @@ def command_ask(args: argparse.Namespace, config, echo: Echo) -> int:
 
     card = load_card(config)
     try:
-        provider = _build_provider(args, config)
+        provider = build_provider(args, config)
         outcome = run_ask(
             question=args.question,
             card=card,
             config=config,
             provider=provider,
             pacer=Pacer(args.min_interval_ms),
-            judge_provider=_judge_provider(args, config, provider),
+            judge_provider=judge_provider_for(args, config, provider),
             k=args.k,
             runs_root=args.runs,
         )

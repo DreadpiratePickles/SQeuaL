@@ -73,9 +73,25 @@ class TestDryRun:
         assert "LIMIT 200" in outcome.answer.markdown
 
     def test_the_run_is_byte_identical_twice(self, config, session_card, tmp_path):
+        """Two dry runs produce the same document, apart from how long it took.
+
+        The footer carries `{elapsed_ms} ms`, which is a measurement of the
+        machine and not of the run: under load the same query takes 1 ms one time
+        and 0 ms the next. Asserting byte-identity over it asserts that a
+        stopwatch is deterministic, which it is not — this test failed roughly
+        one run in thirty on a busy laptop before the elapsed time was
+        normalised out. Everything else is compared byte for byte, including the
+        figure, the SQL and every confidence contribution.
+        """
+        elapsed = re.compile(r"in \d+ ms")
         first = ask(config, session_card, tmp_path)
         second = ask(config, session_card, tmp_path)
-        assert first.answer.markdown == second.answer.markdown
+        assert elapsed.sub("in <N> ms", first.answer.markdown) == elapsed.sub(
+            "in <N> ms", second.answer.markdown
+        )
+        # The normalisation must be narrow: exactly one place in the document
+        # carries a timing, and it is the footer.
+        assert len(elapsed.findall(first.answer.markdown)) == 1
 
     def test_two_runs_do_not_overwrite_each_other(self, config, session_card, tmp_path):
         first = ask(config, session_card, tmp_path)

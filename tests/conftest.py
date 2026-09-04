@@ -24,6 +24,7 @@ from sqeual.config_file import SqeualConfig, load_config
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMMITTED_CONFIG = REPO_ROOT / "sqeual.toml"
 COMMITTED_SCHEMA_SQL = REPO_ROOT / "data" / "schema.sql"
+COMMITTED_GOLDENS = REPO_ROOT / "goldens" / "questions.yaml"
 
 
 def write_config(directory: Path, substitutions: Sequence[tuple[str, str]] = ()) -> Path:
@@ -150,3 +151,69 @@ def explanation_json(explanation: str) -> str:
     import json
 
     return json.dumps({"explanation": explanation})
+
+
+# --- Phase C helpers -------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def committed_questions():
+    """The committed golden set, loaded once.
+
+    The tests read the *real* file rather than a fixture invented for them, for
+    the same reason `write_config` copies the real `sqeual.toml`: a golden set
+    that drifted from the one a reader would run is a golden set nobody is
+    testing.
+    """
+    from sqeual.eval.goldens import load_questions
+
+    return load_questions(COMMITTED_GOLDENS)
+
+
+@pytest.fixture()
+def eval_config(tmp_path, session_db):
+    """The committed configuration, pointed at the session database."""
+    return phase_b_config(tmp_path, session_db)
+
+
+@pytest.fixture(scope="session")
+def offline_eval(tmp_path_factory, session_db, session_card, committed_questions):
+    """One whole offline evaluation of the committed golden set, built once.
+
+    Session-scoped because it is the same run every time — forty questions
+    through a provider scripted per question, deterministic end to end — and two
+    test modules assert facts about it. Re-running it per test would cost thirty
+    identical passes to assert thirty facts about one.
+    """
+    from sqeual.eval.fake import dry_run_provider
+    from sqeual.eval.run import build_provenance, prepare_references, run_eval
+    from sqeual.providers.pacing import Pacer
+
+    directory = tmp_path_factory.mktemp("eval")
+    config = phase_b_config(directory, session_db)
+    references = prepare_references(committed_questions, card=session_card, config=config)
+    provider = dry_run_provider(committed_questions, references)
+    pacer = Pacer(0)
+    provenance = build_provenance(
+        questions=committed_questions,
+        goldens_path=COMMITTED_GOLDENS,
+        card=session_card,
+        config=config,
+        provider=provider,
+        judge_model_id=provider.model_id,
+        k=None,
+        pacer=pacer,
+        dry_run=True,
+    )
+    out = directory / "out"
+    out.mkdir()
+    return run_eval(
+        questions=committed_questions,
+        references=references,
+        card=session_card,
+        config=config,
+        provider=provider,
+        pacer=pacer,
+        provenance=provenance,
+        out_dir=out,
+    )

@@ -1,0 +1,92 @@
+# Point `regress` at SQeuaL.
+#
+# This is project 1's `regression.toml`, unchanged except for `[target]`. That
+# is the whole integration: project 1's runner takes SQeuaL as one more
+# text-in/text-out feature, and neither repository imports the other's
+# vocabulary to do it. Nothing in project 1 knows what a schema card, a guard
+# report or a confidence level is, and nothing in SQeuaL knows what a baseline
+# is.
+#
+# Copy this file into a checkout of `regress` (or pass it with `--config`) and
+# run it from there:
+#
+#     uv run python scripts/run_goldens.py \
+#         --config /path/to/08_text_to_sql/regress/regression.toml \
+#         --goldens /path/to/08_text_to_sql/regress/goldens.yaml \
+#         --samples 1 --min-interval-ms 6500
+#
+# The thresholds below are project 1's committed defaults and are copied rather
+# than tuned: what counts as a regression does not depend on which feature is
+# being measured, and a threshold that moved with the target would make two
+# targets' verdicts incomparable.
+#
+# **Build a baseline per target.** A baseline recorded against project 1's own
+# summarizer says nothing about this one. `docs/regress-integration.md` sets out
+# the whole flow.
+
+[compare]
+# Significance level for the one-sided Fisher exact test.
+alpha = 0.05
+
+# Smallest pass-rate drop worth failing a build over, as a fraction.
+min_effect = 0.05
+
+# Fewest judged criteria before any verdict other than INCONCLUSIVE is reported.
+# Eight cases with two or three criteria each clears 30 at one sample apiece.
+min_samples = 30
+
+# Largest share of candidate judge calls that may have failed before the run is
+# treated as unreadable rather than as a result.
+max_judge_error_rate = 0.2
+
+[run]
+samples = 1
+
+[models]
+# Names of environment variables, never model ids. These select the model
+# project 1's *judge* runs on. The model SQeuaL runs on is selected by
+# SQEUAL_SQL_MODEL_ID inside the child process, which is why that variable is on
+# the allowlist below and not in this section.
+target_model_id_env = "TARGET_MODEL_ID"
+judge_model_id_env = "JUDGE_MODEL_ID"
+
+[target]
+kind = "command"
+
+# A list, never a shell string. Nothing is passed to a shell, so no question,
+# path or configuration value can turn into a command — which matters more here
+# than in most targets, because every input to this one is a sentence somebody
+# typed.
+#
+# `--config` is absolute because project 1's runner sets `cwd` for the child and
+# SQeuaL resolves a relative config path against the current directory. Replace
+# both paths with your checkout's.
+argv = [
+    "uv", "run", "python", "scripts/sqeual.py", "ask-target",
+    "--config", "/path/to/08_text_to_sql/sqeual.toml",
+    "--min-interval-ms", "6500",
+]
+
+# The child is a whole pipeline: k generation calls, a back-translation and two
+# judge calls, paced at 6.5 seconds. 60 seconds would time out on the pacing
+# alone.
+timeout_s = 300.0
+
+# Where the child runs, so `data/support.db` and `goldens/` resolve. It must be
+# a directory where `sqeual db build` has already been run: `ask-target` reads
+# the database and does not build it.
+cwd = "/path/to/08_text_to_sql"
+
+# The child's whole environment, plus PATH. It needs the provider key and, if a
+# deployment is pointing SQeuaL at a different model, the two reference
+# variables. It does not need — and does not get — anything else this process
+# happens to hold.
+#
+# `HOME` is here because `uv` resolves its cache under it; without it the child
+# re-resolves the environment on every single call.
+env_allowlist = [
+    "GEMINI_API_KEY",
+    "HOME",
+    "SQEUAL_SQL_MODEL_ID",
+    "SQEUAL_JUDGE_MODEL_ID",
+]

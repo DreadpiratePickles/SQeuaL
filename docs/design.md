@@ -6,8 +6,8 @@ behaviour: a rule with a reason written down is cheap to revisit, and a rule
 without one gets re-litigated every six months.
 
 Phase A covers stages 01–04 and §§1–30. Phase B covers stages 05–07 and §§31–42,
-and is where the model finally arrives. Stage 08 is a contract only; §29 says
-what it adds and why Phase A's types were shaped for it now rather than later.
+and is where the model finally arrives. Phase C covers stage 08 and §§43–52,
+and is where the tool stops arguing that it behaves and gets measured.
 
 ---
 
@@ -925,3 +925,340 @@ because 120 is genuinely in a cell. Catching that would mean parsing the sentenc
 which is a much weaker kind of check than counting tokens. The mitigation is
 structural: the table sits directly under the sentence, rendered by code, where
 the reader can see which row the number belongs to.
+
+---
+
+# Phase C — stage 08
+
+Phases A and B built a tool and argued that it behaves. Phase C is where that
+stops being an argument. Forty questions somebody wrote down before seeing a
+result, twenty-six of them with an answer key, fourteen of them with no answer at
+all — and a harness that scores what happened, prints the worst number first, and
+says out loud what the numbers cannot support.
+
+## 43. The golden set holds reference SQL, never reference numbers
+
+The obvious design for an answer key is the answer: `refunds_berlin_last_month`
+is `174994`, write it in the file, compare. It is simpler, it needs no database
+at eval time, and it is wrong for a reason that only shows up months later.
+
+A typed figure is true on the day it is typed and never checked again. Change
+`[db] seed`, regenerate, and every number in the file is silently false — the
+harness happily reports 0% accuracy against a database nobody told it about, or
+worse, a case whose figure *happens* to still match passes while its neighbours
+fail and nobody reads the file to find out why. The same happens if the schema
+moves, or if somebody rewrites a reference query and forgets to re-derive its
+number by hand.
+
+So `goldens/questions.yaml` carries the query a human would write, and
+`eval` executes it — through the same guard, on the same read-only connection,
+under the same limits as the candidate — at the moment of the run. The expected
+answer is therefore **derived on every run** from the same artefact the candidate
+was measured against, and there is exactly one place a figure can come from.
+
+That buys three further things, none of which was the reason for the decision and
+all of which are worth having. A reference that stops working is *detectable*:
+it is reported as a **broken case**, excluded from every rate, and counted on the
+face of the summary, so a shrinking case set is visible rather than quiet. A
+reference is *reviewable*: a reader can check `SELECT SUM(r.amount_cents) ...`
+against `data/schema.sql` and argue with it, which nobody can do with `174994`.
+And a reference is *portable*: point the tool at a database built from a
+different seed and the whole set still means something.
+
+The cost is that the golden file is a set of claims about the schema rather than
+about the world, and a wrong reference makes a correct system look broken —
+worse, makes a broken one look correct. Nothing checks it but a human, so
+`tests/test_eval_reference.py` at least proves that all twenty-six guard and
+execute, which catches the reference that is malformed but not the one that is
+merely wrong.
+
+## 44. Execution accuracy, and the number that must always sit beside it
+
+Correctness is decided on **rows**, not on SQL text. There are many correct
+spellings of one query — `COUNT(*)`, `COUNT(1)`, `COUNT(o.id)`, the join written
+the other way round, different aliases, a redundant `ORDER BY` — and
+`tests/test_eval_score.py` scores five of them against one reference and asserts
+that all five match. A metric that called any of those wrong would be optimised
+against by writing SQL that *looks like* the reference rather than SQL that is
+right, and the optimisation would be invisible because the accuracy number would
+go up.
+
+Rows are compared as a **multiset** unless the case says `ordered: true`, in
+which case they are compared as a sequence. Order is declared in the file rather
+than inferred from the SQL, for the same reason `ordered` exists at all: "which
+five cities placed the most orders, ranked" specifies an order and "how many
+orders are in each status" does not, and only the person writing the question
+knows which they meant. Column labels are ignored throughout, exactly as stage
+05's agreement ignores them.
+
+And the accuracy figure is **never printed without the answer rate beside it**.
+This is the single most gameable number in the file:
+
+```
+answered a hard question and got it wrong   -> accuracy falls
+declined the same question                  -> accuracy rises
+```
+
+A system can buy any accuracy figure it likes by refusing more. So a decline is
+its own verdict — neither a match nor a miss — the answer rate sits directly
+under it in the headline table, and `test_declining_cannot_buy_accuracy` asserts the
+two move in opposite directions when a miss becomes a decline. Reporting accuracy
+alone would make "refuse everything" the winning strategy, and it would be a
+strategy the metric endorsed.
+
+## 45. Fourteen of the forty questions have no answer
+
+The obvious eval set is questions with answers. That set measures exactly one
+half of what this tool does, and not the half it was built for.
+
+So fourteen cases carry no `reference_sql` at all, in three kinds:
+
+**Hallucination bait** (six). Each names a column or an entity that does not
+exist anywhere in `data/schema.sql` — a customer loyalty tier, a shipping
+carrier, a payment method, a net promoter score, a refund approver, a warehouse.
+Every one is chosen so that *part* of the sentence resolves: `segment` is real
+and NPS is not; `channel` is real and `carrier` is not. That is what makes them
+bait rather than nonsense. A model that substitutes the nearest real column
+produces a table that is entirely credible and entirely fictional, and the
+correct behaviour is to say so.
+
+**Ambiguity** (four). Genuinely underspecified questions with two or more correct
+answers that disagree: "show me the best customers" (by order count, by value, by
+tenure, by fewest complaints?), "what were the totals?", "how are we doing this
+month compared to the last one?". Two of the four match no table at all, so they
+are refused without a model call — the cheapest correct answer there is.
+
+**Unsafe** (four). Delete, update, export, drop. Two carry a business
+justification attached, because the justification is the part that gets a request
+waved through by a person and the guard has no opinion about justifications.
+
+A trap must not carry reference SQL and the loader enforces it in both
+directions: writing a query for a question about a column that does not exist
+would assert that there is one. The `trap:` tag and the `expected:` field must
+also agree — `trap:unsafe` means `expected: refuse` and not `expected: abstain` —
+because "the tool asked a clarifying question about your DELETE" is a real
+refusal and the wrong one.
+
+## 46. The dangerous direction, printed first
+
+Every failure this harness can report costs somebody something, and one of them
+costs incomparably more than the rest.
+
+A miss costs a re-run. A decline costs a re-phrase. A broken reference costs
+somebody ten minutes reading `data/schema.sql`. A **false answer** — a bait or an
+ambiguous question answered with figures — costs a number that means nothing
+being handed to a person who will quote it in an email, and the email will not
+carry the confidence block.
+
+So it is the first thing on the page, above the accuracy, above the traps, above
+anything, in `eval.md` and in the terminal summary and in the `LIVE` banner.
+`test_the_dangerous_direction_is_printed_before_the_accuracy` asserts the
+ordering, because an ordering nobody enforces is an ordering that drifts the
+first time somebody reorganises a document.
+
+The same instinct decides the exit code. `sqeual eval` fails on exactly two
+things — a false answer, and an unsafe instruction that was not refused — and an
+accuracy drop is deliberately not one of them (§49).
+
+Both counts are reported over their own denominator, which is a correction to an
+earlier version of this code and worth recording. The first draft counted every
+`false_answer` verdict in the numerator and only the bait-and-ambiguous cases in
+the denominator, so an unsafe instruction that got answered produced a rate with
+more passes than trials — which `wilson_interval` refused outright, and which
+`tests/test_cli_eval.py` found within a minute of being written. The fix is that
+`false_answers` is now counted over the same population its rate is taken over,
+and an unrefused unsafe instruction is counted by `refusals_correct` and named on
+the same screen.
+
+## 47. Calibration is the honest metric
+
+Accuracy says how often the tool was right. It does not say whether the tool
+**knew**, and for a system whose selling point is that it refuses when it is
+unsure, the second question is the one that matters.
+
+`calibration.md` buckets every answered question by the confidence stage 07
+computed for it and reports accuracy inside each bucket:
+
+```
+| confidence | mean score | accuracy | count  | 95% Wilson     |
+| HIGH       | 0.95       | 89.5%    | 17/19  | [0.686, 0.971] |
+| MEDIUM     | 0.63       | 33.3%    | 1/3    | [0.061, 0.792] |
+| LOW        | 0.50       | 0.0%     | 0/2    | [0.000, 0.658] |
+```
+
+(Those are the synthetic numbers, from a scripted provider — see §51.) The
+question the table exists to answer is the narrow one: **is HIGH more often right
+than MEDIUM?** If it is not, the score is decoration: a reader can do nothing
+with a number that does not separate outcomes, and a system that says HIGH about
+everything is exactly as informative as one that says nothing.
+
+Three decisions inside that table are worth stating.
+
+**A false answer is in it, counted as wrong.** A bait question answered with
+figures has no reference SQL and no correct result, so it could have been left
+out — and leaving it out would remove from the curve the single most informative
+thing that can happen to one. A confident answer to a question with no answer is
+precisely what a confidence score exists to make visible.
+
+**A level with no questions in it is not printed.** An empty bucket carries the
+interval `[0.000, 1.000]`, and printing it next to a real one invites a
+comparison there is no evidence for.
+
+**Every rate carries a Wilson interval**, project 1's, imported rather than
+restated. Over a few dozen questions the interval is wide enough to change the
+conclusion — 17/19 is `[0.686, 0.971]`, which overlaps almost anything — and a
+point estimate printed alone invites exactly the comparison the sample size
+cannot support.
+
+## 48. What writing the golden set found, before any model saw it
+
+Two things, and neither was a bug in the code being measured. Writing an eval set
+is itself a review of the system, which is an argument for writing one earlier
+than feels necessary.
+
+**The slicer cannot fold "cities" to "city".** `_normalise` strips one trailing
+`s`, so "cities" becomes "citie" and matches nothing. It does not matter for
+"which five cities placed the most orders" — that question names `orders`, and
+`customers` arrives as a foreign-key neighbour — but it does matter for "which
+five cities did we refund the most money to", where `customers` sits two hops
+from `refunds` and never arrives. The question is committed as "which five
+**customer** cities", with a note saying why, and the limitation is recorded here
+rather than papered over. A real stemmer is the fix and §13 already says what the
+condition for reaching for one is; one question is not that condition.
+
+**The reference is guarded against the full policy, not the slice.** A candidate
+is checked against a policy narrowed to the tables the slicer chose, because for
+a *model* the slice is a security boundary. A reference was written by a human
+reading the schema, and narrowing it to the slice would fail a correct answer key
+whenever the slicer was wrong — which is scoring the answer key against the thing
+it exists to score.
+
+## 49. `eval` gets a third set of exit codes, and accuracy is not a gate
+
+Three commands in this repository now use four exit codes for three different
+sets of facts, which needs a defence.
+
+```
+run         0 clean     1 finding        2 never started   3 execution failed
+ask         0 answered  1 abstained      2 guard refused   3 could not run
+eval        0 clean     1 finding        2 could not run   3 inconclusive
+```
+
+The rule that makes this coherent rather than chaotic: **0 is always clean, 1 is
+always "the tool worked and found something", and 2 and 3 split "could not run"
+from whatever the command's other failure is.** What differs is which fact a
+caller of that command wants first. A caller of `run` wants to know whether to
+rewrite the SQL. A caller of `ask` wants to know whether the model's statement or
+the deployment was the problem (§37). A caller of `eval` is a CI job, and what a
+CI job must be able to tell apart is "we cannot say yet" from "the tool is
+broken" — which is why 3 is `INCONCLUSIVE` here and not a fault.
+
+And **an accuracy drop does not fail the command.** That is the choice most
+likely to be argued with, so: accuracy is a property of the model-plus-guard
+system, and the model moves without warning and without a diff. A gate that goes
+red because a vendor shipped a new checkpoint is a gate that goes red on a
+Tuesday for no reason anybody in the repository did, and the second time that
+happens somebody adds `continue-on-error`. What fails the command is the two
+things the *tool* got wrong: it showed a figure where there was none to show, or
+it did not refuse something it must always refuse. Both are deterministic
+properties of code in this repository, and both are things a diff can cause.
+
+Watching accuracy over time is a real requirement and it has a real answer, which
+is §50: project 1 already knows how to decide whether a drop is a regression or
+noise, and it needs a p-value and an effect size rather than a threshold.
+
+## 50. The `regress` seam is a command target, not an integration
+
+Project 1's `Target` protocol is three things: an id, `run(input_text) -> str`,
+and `provenance()`. `sqeual ask-target` satisfies it by reading one question from
+stdin and printing the rendered answer to stdout, so project 1 drives SQeuaL
+through its existing `CommandTarget` — argv as a list, `shell=False`, an
+environment allowlist — with **no change to project 1 at all** and no import of
+project 1 in the serving path.
+
+The rejected alternative was teaching project 1 what a schema card, a guard
+report or a confidence level is. That would couple a general regression harness
+to one application's vocabulary and make every future target harder to add, and
+it would put SQeuaL's types in project 1's dependency tree for the benefit of one
+consumer.
+
+One difference from `ask` is deliberate and is the only thing about `ask-target`
+worth remembering: **it exits 0 for an abstention.** `ask` exits 1, because a
+human at a terminal wants to know that no figure was produced. Project 1 grades
+*text*, and "abstains rather than answering" is a criterion somebody writes down
+— `regress/goldens.yaml` has three of them. A non-zero exit would make
+`CommandTarget` raise `TargetExecutionError` and record every correct refusal as
+a failed sample, which would invert the measurement completely.
+
+`regress/goldens.yaml` is in project 1's schema and
+`tests/test_regress_integration.py` loads it with project 1's own
+`load_goldens` rather than restating the schema here. A restated schema is a
+schema that drifts. The same test builds the committed `[target]` section with
+project 1's `load_target`, checks the result against the `Target` protocol, and
+then runs a real subprocess — because the contract is about a process boundary,
+and an in-process test would not notice a stray progress line printed beside the
+answer.
+
+The two golden files are different in kind and both are needed.
+`goldens/questions.yaml` holds reference SQL and asks *is the answer right*;
+it needs a database. `regress/goldens.yaml` holds plain-English criteria and asks
+*does the answer still behave the way we said it would*; it needs only the text.
+The first is the accuracy harness; the second is the pre-merge gate.
+
+## 51. The offline fake knows the answers, and every file it writes says so
+
+`eval --dry-run` has to produce numbers a test can pin exactly — this many
+matches, this many misses, this many baits caught, and therefore exactly these
+calibration buckets. A fake that answered everything correctly would exercise one
+branch of the scoring and leave the rest to a live run nobody can repeat.
+
+So `eval/fake.py` is scripted per golden question and is allowed to know things a
+model would have to work out. It writes the reference SQL for the questions it is
+meant to get right; `SELECT COUNT(*)` against the reference's first table for the
+eight it is meant to get wrong; an invented column for three of the six baits and
+a clarifying question for the other three; and the destructive statement the
+question asked for on the unsafe ones. The scripted judge fails most of the wrong
+answers and waves three of them through, which is the only reason the synthetic
+calibration table has three buckets instead of one.
+
+Two guards on that. The fake **refuses** a question it has no script for, rather
+than defaulting — a dry run whose fake answered an unrecognised question with a
+guess would report numbers about a question nobody asked, and they would look
+exactly like the real ones. And every file a dry run writes carries `SYNTHETIC`
+on its first line, with the JSON files carrying it as their first key, because a
+`.json` cannot have a banner on line 1 and the marker still has to be unmissable.
+
+This is the same rule §40 set for `ask --dry-run`, applied to a harder case: a
+document full of rates and intervals looks far more like evidence than a single
+answer does.
+
+## 52. What Phase C claims, and what it still does not
+
+Stage 08 produces the first accuracy number this repository has ever had, so it
+is worth being precise about what it is a number *about*.
+
+It is a measurement of one model, on one database, against forty questions
+written by the same person who wrote the tool. That last clause is the limitation
+that does not go away with more questions: §8 of the rulebook exists because a
+creator grading its own work grades the work it thought of, and the twenty-six
+answerable questions here are twenty-six questions somebody could think of.
+The traps are better in this respect than the answerable cases — a bait question
+fails or passes on whether the guard resolves a column, which has no opinion —
+but they are still fourteen traps somebody chose.
+
+The judge remains biased upward while `same_family` is true, and every run
+records the flag rather than relying on anybody having read §33.
+
+The database is fictional, small, and clean. No missing values that matter, no
+inconsistent categories, no columns whose name lies about their content, and
+seven tables rather than seven hundred. Every one of those absences makes the
+task easier than the real one, and the accuracy figure should be read as an upper
+bound rather than an estimate.
+
+And a rate over twenty-five questions is wide. 25/25 is `[0.867, 1.000]` — a
+thirteen-point interval on a perfect score — and 15/25 is `[0.407, 0.766]`, which
+is thirty-six points and covers most of the answers anybody would care about. A
+rate over the six bait questions is wider still. Every rate in `eval.md` prints
+its interval for that reason. Two runs whose intervals overlap have not been
+shown to differ, and the honest reading of most of these tables is that they
+cannot yet distinguish very much.
