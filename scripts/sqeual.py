@@ -10,9 +10,9 @@
 
 Every command takes `--config <path>`, defaulting to `./sqeual.toml`.
 
-`ask` is the only command that calls a model, and `--dry-run` makes even that one
-offline: no key, no network, no money. Its four exit codes are NOT the other
-commands' four — see `sqeual/cli_ask.py`.
+`ask` is one of three commands that call a model (`ask`, `ask-target`, `eval`),
+and `--dry-run` makes every one of them offline: no key, no network, no money.
+Its four exit codes are NOT the other commands' four — see `sqeual/cli_ask.py`.
 
 The logic lives in `sqeual.cli` so the test suite can import and exercise it
 directly. This file only wires the command line to it.

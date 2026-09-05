@@ -62,7 +62,7 @@ Stage 07 writes `runs/<ts>/`, which is gitignored.
 | `runs/` | 4 | One directory per `ask`: `trace.json` and `answer.md`. **Gitignored** — it holds a question somebody asked and the rows that came back |
 | `goldens/questions.yaml` | 3 | Forty golden questions. Twenty-six carry **reference SQL**, executed at eval time; fourteen are traps and carry none, because a question about a column that does not exist has no correct query |
 | `goldens/README.md` | 3 | The rules a golden question has to satisfy, and the two traps found writing them |
-| `regress/goldens.yaml` | 3 | Eight cases in **project 1's** schema — plain-English criteria, judged — so `regress` can guard this repository pre-merge |
+| `regress/goldens.yaml` | 3 | Nine cases in **project 1's** schema — plain-English criteria, judged — so `regress` can guard this repository pre-merge |
 | `regress/regression.toml` | 3 | Project 1's committed thresholds unchanged, plus a `[target] kind = "command"` pointing at `sqeual ask-target` |
 | `docs/regress-integration.md` | 3 | How the seam works, why it is a subprocess, and how project 9 would roll out a change to `generate_v1.md` |
 | `docs/examples/*.live.md`, `*.synthetic.md` | 4 | Committed evidence from real and offline runs. Every one carries `LIVE` or `SYNTHETIC` on line 1 |

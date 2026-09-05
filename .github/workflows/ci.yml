@@ -173,6 +173,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run python - <<'PY'
+          import sys
           import tomllib
           from pathlib import Path
 
@@ -180,8 +181,16 @@ jobs:
           from regression_detect.target.adapters.base import Target
           from regression_detect.target.adapters.factory import load_target
 
+          # The expected count is read from the suite rather than restated
+          # here. It was restated once, a ninth golden case was added, and
+          # this step spent that time asserting a number nothing else used.
+          sys.path.insert(0, "tests")
+          from test_regress_integration import EXPECTED_CASES
+
           cases = load_goldens(Path("regress/goldens.yaml"))
-          assert len(cases) == 8, f"expected 8 cases, got {len(cases)}"
+          assert len(cases) == EXPECTED_CASES, (
+              f"expected {EXPECTED_CASES} cases, got {len(cases)}"
+          )
 
           section = dict(tomllib.loads(Path("regress/regression.toml").read_text())["target"])
           # The committed cwd is a placeholder a reader replaces; the adapter

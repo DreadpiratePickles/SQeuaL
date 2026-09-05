@@ -8,7 +8,7 @@ Stage 08 answers *is the answer right?* It needs a database, twenty-six referenc
 queries and a couple of hundred model calls, and it is the thing you run when you
 want an accuracy number. This document is about the other question — *does the
 tool still behave the way we said it would?* — which needs only the text SQeuaL
-prints, runs on eight cases, and is cheap enough to put on a pull request.
+prints, runs on nine cases, and is cheap enough to put on a pull request.
 
 ## The seam, in three functions
 
@@ -58,7 +58,7 @@ project 1's `load_target`, checks the result against the `Target` protocol, and
 then runs a real subprocess — the contract is about a process boundary, and an
 in-process test would not notice a stray progress line printed beside the answer.
 
-## What the eight cases are for
+## What the nine cases are for
 
 Every criterion is one check a stranger could apply by reading the output, and
 most of them are negative. A negative criterion is the strongest regression
@@ -75,6 +75,7 @@ a sentence that is in no result cell.
 | `unsafe_delete_refunds` | A destructive instruction stopped being refused, or started being reported as done |
 | `empty_result_is_an_answer` | An empty result turned into a zero, or into an error. Those are three different claims |
 | `number_provenance` | The line saying every figure was formatted by code from a result cell disappeared — the only place the guarantee is stated to the reader |
+| `export_customer_emails_refused` | An email address reached the screen again. The criterion is about the output, not the rule, so it catches the aggregate and the join as well as the statement that caused it |
 
 ## Running it
 
@@ -86,7 +87,7 @@ your own. Then, from the `regress` checkout:
 # 1. Build the database SQeuaL answers from, in the SQeuaL checkout.
 cd /path/to/08_text_to_sql && uv run python scripts/sqeual.py db build
 
-# 2. Run the eight cases through SQeuaL. `--config` is what points project 1's
+# 2. Run the nine cases through SQeuaL. `--config` is what points project 1's
 #    runner at the [target] section; without it, it measures its own summarizer.
 cd /path/to/regress
 SQ=/path/to/08_text_to_sql
@@ -122,8 +123,8 @@ trivial drop significant, and a CI job that fails on noise is a CI job people
 disable.
 
 **Timing.** The target here is not one model call; it is a whole pipeline —
-`k` generation calls, a back-translation and two judge calls, paced. Eight cases
-at three samples is around 150 SQeuaL-side calls plus project 1's own judging, so
+`k` generation calls, a back-translation and two judge calls, paced. Nine cases
+at three samples is around 170 SQeuaL-side calls plus project 1's own judging, so
 `timeout_s` in the committed `[target]` section is 300 rather than the default
 60. A cold `uv run` also resolves the environment before the child starts, which
 is why `HOME` is on the environment allowlist: without it `uv` re-resolves on
@@ -133,7 +134,7 @@ every single call.
 `--dry-run` to the committed `argv` makes the whole thing run offline with no key,
 which is a useful smoke test and is what `tests/test_regress_integration.py`
 does — but the scripted fake answers by keyword, so its output will fail several
-of the eight criteria and should never be baselined.
+of the criteria and should never be baselined.
 
 ## Why not just run stage 08 on a pull request?
 

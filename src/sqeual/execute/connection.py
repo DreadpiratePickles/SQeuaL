@@ -1,11 +1,11 @@
 """Open the database so that nothing can write through it.
 
-Read-only is enforced at **three independent layers**, and the reason is worth
+Read-only is enforced at **four independent layers**, and the reason is worth
 stating plainly: the failure mode of "the guard has a hole" is a database with
 rows missing, and a hole in a parser is not a hypothetical.
 
 1. **The guard** refuses anything that is not a SELECT. It reads a parse tree,
-   which is the strongest of the three checks and also the one most likely to
+   which is the strongest of the four checks and also the one most likely to
    have a bug, because it is the one this repository wrote.
 2. **`mode=ro` in the connection URI.** SQLite opens the file read-only at the
    operating-system level. No statement executed through the connection can

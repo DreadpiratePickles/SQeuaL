@@ -78,7 +78,7 @@ computed.
 ## Verify
 
 - `uv run pytest -q tests/test_schema_card.py tests/test_schema_render.py
-  tests/test_schema_slice.py` — 59 tests.
+  tests/test_schema_slice.py` — 68 tests.
 - `test_schema_sha256_ignores_row_counts_and_samples` and
   `test_schema_sha256_changes_when_a_column_is_added` pin the hash's meaning
   from both sides.

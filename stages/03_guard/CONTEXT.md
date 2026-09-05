@@ -101,7 +101,7 @@ to a FAIL is the kind of thing somebody eventually executes.
 
 - `uv run pytest -q tests/test_guard_rules.py tests/test_guard_limits.py
   tests/test_guard_resolution.py tests/test_guard_exposure.py` —
-  135 tests. Every rule is tested in both directions, because a guard whose
+  141 tests. Every rule is tested in both directions, because a guard whose
   failing path is untested might be returning PASS unconditionally and the suite
   would never notice.
 - Exposure cases: `SELECT name, email FROM customers LIMIT 200` — the statement

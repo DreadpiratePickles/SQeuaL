@@ -130,7 +130,7 @@ def _starred_denials(
     ctes = {cte.alias_or_name.lower() for cte in statement.find_all(exp.CTE)}
     found: list[str] = []
     for select in statement.find_all(exp.Select):
-        for name in starred_tables(select, card, ctes):
+        for name in starred_tables(select, ctes):
             table = card.table(name)
             if table is None:
                 continue

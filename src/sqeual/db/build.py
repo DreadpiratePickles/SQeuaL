@@ -138,8 +138,7 @@ def build_database(
     out_path = Path(out_path)
     if out_path.exists() and not overwrite:
         raise DatabaseBuildError(
-            f"{out_path} already exists. Pass overwrite=True (or `--force` on the command line) "
-            "to replace it."
+            f"{out_path} already exists. Pass --force on the command line to replace it."
         )
 
     schema_sql = _read_schema_sql(schema_sql_path)

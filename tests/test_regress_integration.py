@@ -22,11 +22,17 @@ REGRESS_GOLDENS = ROOT / "regress" / "goldens.yaml"
 REGRESS_CONFIG = ROOT / "regress" / "regression.toml"
 SCRIPT = ROOT / "scripts" / "sqeual.py"
 
+# The number of cases in `regress/goldens.yaml`, in the one place anything
+# that needs it reads it from. The CI job imports this constant rather than
+# restating the number, because restating it is how the workflow came to
+# assert eight cases against a file that had nine.
+EXPECTED_CASES = 9
+
 
 def test_project_ones_loader_accepts_our_golden_file():
     """The claim, checked by the only thing that can check it."""
     cases = load_goldens(REGRESS_GOLDENS)
-    assert len(cases) == 9
+    assert len(cases) == EXPECTED_CASES
     assert all(case.criteria for case in cases)
     assert all(case.notes for case in cases)
 
