@@ -33,12 +33,14 @@ from .config_pipeline import (
     AnswerSettings,
     ConfidenceSettings,
     CostSettings,
+    GatesSettings,
     GenerateSettings,
     TimeSettings,
     VerifySettings,
     load_answer,
     load_confidence,
     load_cost,
+    load_gates,
     load_generate,
     load_time,
     load_verify,
@@ -86,6 +88,13 @@ class GuardSettings:
     star_row_threshold: int
     allow_star: bool
     allowed_tables: frozenset[str]
+    denied_columns: frozenset[str]
+    """`table.column`, lowercased. Columns that may not reach a reader through
+    the outermost projection, ORDER BY or GROUP BY. A column-level control, and
+    a different thing from `allowed_tables`, which is all-or-nothing per
+    table."""
+    allow_denied_in_aggregates: bool
+    max_unaggregated_rows: int
     allowed_functions: frozenset[str]
 
 
@@ -120,6 +129,7 @@ class SqeualConfig:
     verify: VerifySettings
     answer: AnswerSettings
     confidence: ConfidenceSettings
+    gates: GatesSettings
     cost: CostSettings
     path: Path
 
@@ -139,6 +149,9 @@ SECTIONS: dict[str, tuple[str, ...]] = {
         "star_row_threshold",
         "allow_star",
         "allowed_tables",
+        "denied_columns",
+        "allow_denied_in_aggregates",
+        "max_unaggregated_rows",
         "allowed_functions",
     ),
     "execute": ("max_ms", "max_rows", "plan_scan_row_threshold"),
@@ -178,6 +191,28 @@ def _synonyms(section: dict[str, Any], *, path: Path) -> dict[str, str]:
             )
         mapping[term.strip().lower()] = table.strip().lower()
     return mapping
+
+
+def _denied_columns(section: dict[str, Any], *, path: Path) -> frozenset[str]:
+    """`[guard] denied_columns`, validated as `table.column` and lowercased.
+
+    The shape is checked here rather than at use. `denied_columns = ["email"]`
+    would otherwise load cleanly, match nothing, and leave a deployment
+    believing it had denied a column — a control that silently does nothing is
+    worse than one that was never configured.
+    """
+    entries = string_list(section, "denied_columns", path=path, allow_empty=True)
+    denied: set[str] = set()
+    for entry in entries:
+        table, separator, column = entry.partition(".")
+        if not separator or not table.strip() or not column.strip() or "." in column:
+            raise ConfigFileError(
+                f"{path}: [guard] denied_columns entry {entry!r} must be spelled "
+                "'table.column'. A bare column name would match nothing and would look "
+                "like a control that was working."
+            )
+        denied.add(f"{table.strip().lower()}.{column.strip().lower()}")
+    return frozenset(denied)
 
 
 def _resolve(base: Path, raw: str) -> Path:
@@ -244,6 +279,9 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> SqeualConfig:
                 name.lower()
                 for name in string_list(guard, "allowed_tables", path=path, allow_empty=True)
             ),
+            denied_columns=_denied_columns(guard, path=path),
+            allow_denied_in_aggregates=boolean(guard, "allow_denied_in_aggregates", path=path),
+            max_unaggregated_rows=positive_int(guard, "max_unaggregated_rows", path=path),
             allowed_functions=frozenset(
                 name.upper()
                 for name in string_list(guard, "allowed_functions", path=path, allow_empty=False)
@@ -265,6 +303,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> SqeualConfig:
         verify=load_verify(document, path=path),
         answer=load_answer(document, path=path),
         confidence=load_confidence(document, path=path),
+        gates=load_gates(document, path=path),
         cost=load_cost(document, path=path),
         path=path,
     )

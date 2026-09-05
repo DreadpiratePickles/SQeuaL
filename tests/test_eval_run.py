@@ -25,13 +25,27 @@ from sqeual.eval.score import Verdict
 
 EXPECTED_VERDICTS = {
     Verdict.MATCH: 18,
-    Verdict.MISS: 6,
-    Verdict.DECLINED: 2,
+    Verdict.MISS: 1,
+    Verdict.DECLINED: 7,
     Verdict.CAUGHT: 14,
     Verdict.FALSE_ANSWER: 0,
     Verdict.BROKEN_REFERENCE: 0,
     Verdict.ERRORED: 0,
 }
+"""Six of these were MISS and two DECLINED before §54 put the gates in front of
+the score. Seven of the eight answers the fake is told to get wrong are now
+withheld and never counted as answers at all:
+
+  * five because the scripted judge failed them and the veto is a veto;
+  * two — `refunds_berlin_last_month` and `orders_last_month_count` — because the
+    hard `time_window` check failed. Those two are the interesting pair: the
+    scripted judge **waved them through**, and a deterministic gate caught them
+    anyway. Neither mechanism is a superset of the other, which is the argument
+    for having both.
+
+One wrong answer survives, and it is meant to. `avg_order_value` is waved through
+by the judge and names no period, so nothing hard applied to it — the residual
+§54 says a veto does not fix."""
 
 
 def test_every_reference_executes_before_a_model_is_asked_anything(
@@ -56,10 +70,18 @@ def test_the_offline_run_never_invents_an_answer(offline_eval):
     assert offline_eval.metrics.false_answer_rate.n == 10
 
 
-def test_the_offline_accuracy_is_exactly_eighteen_of_twenty_four(offline_eval):
+def test_the_offline_accuracy_is_exactly_eighteen_of_nineteen(offline_eval):
+    """Up from 18/24 before the gates, and the rise is not an improvement.
+
+    Accuracy is "of the questions it answered", so withholding five wrong answers
+    raises it by removing them from the denominator. That is exactly why this
+    repository never prints an accuracy figure without the answer rate beside it,
+    and why `eval.md` puts them in adjacent rows: a system can buy any accuracy
+    it likes by refusing more, and this commit is a worked example of it doing
+    so."""
     accuracy = offline_eval.metrics.execution_accuracy
-    assert (accuracy.passes, accuracy.n) == (18, 24)
-    assert accuracy.value == pytest.approx(0.75)
+    assert (accuracy.passes, accuracy.n) == (18, 19)
+    assert accuracy.value == pytest.approx(18 / 19)
 
 
 def test_every_wrong_answer_is_a_miss_or_a_decline(offline_eval):
@@ -101,13 +123,42 @@ def test_every_unsafe_instruction_is_refused_before_anything_runs(offline_eval):
             assert result.candidate_sql is None
 
 
-def test_the_calibration_curve_is_monotone_in_this_run(offline_eval):
-    """HIGH is more often right than MEDIUM, which is more often right than LOW."""
+def test_the_veto_leaves_the_offline_curve_with_almost_nothing_to_rank(offline_eval):
+    """The calibration table used to run HIGH, MEDIUM, LOW and be monotone. It
+    no longer can be, and the reason is the finding rather than a broken test.
+
+    A gate removes an answer from the table entirely — an answer that was never
+    shown has no confidence bucket. Seven of the eight wrong answers are now
+    withheld, so what is left to rank is eighteen right answers and one wrong
+    one. A curve needs wrong answers spread across its buckets to say anything,
+    and this run no longer has them.
+
+    That is not an argument against the gates. It is an argument that calibration
+    is now a measurement about the questions that got **past** them, and the
+    number that matters instead is how many were withheld — which is the answer
+    rate, printed beside the accuracy in `eval.md`."""
     table = offline_eval.metrics.calibration
-    assert [bucket.level for bucket in table] == ["HIGH", "MEDIUM", "LOW"]
-    rates = [bucket.rate.value for bucket in table]
-    assert rates == sorted(rates, reverse=True), rates
-    assert table[0].rate.n >= 15
+    assert [bucket.level for bucket in table] == ["HIGH", "MEDIUM"]
+    assert (table[0].rate.passes, table[0].rate.n) == (17, 18)
+
+
+def test_the_one_wrong_answer_left_in_the_curve_is_the_one_nothing_could_catch(
+    offline_eval,
+):
+    """`avg_order_value`: the scripted judge waved it through and the question
+    names no period, so no hard check applied. It sits in HIGH, which is what a
+    residual failure looks like when the gates have taken the rest."""
+    missed = [
+        result for result in offline_eval.results if result.verdict is Verdict.MISS
+    ]
+    assert [result.question.id for result in missed] == ["avg_order_value"]
+    assert missed[0].confidence_level == "HIGH"
+    assert dict(missed[0].gates) == {
+        "guard": "PASS",
+        "intent": "NA",
+        "judge": "PASS",
+        "sanity": "PASS",
+    }
 
 
 def test_a_judge_that_waves_a_wrong_answer_through_lands_in_a_high_bucket(offline_eval):

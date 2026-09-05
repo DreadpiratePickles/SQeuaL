@@ -71,8 +71,12 @@ def test_the_limited_run_scores_exactly_what_it_should(tmp_path, session_db):
         "errored": 0,
     }
     assert metrics["false_answers"]["count"] == 0
+    # 3 of 4, not 3 of 5: since §54 one of the five answerable questions in this
+    # prefix is withheld by a gate rather than answered wrongly, and a withheld
+    # answer is in no accuracy denominator. The answer rate below is where that
+    # shows up as a cost.
     assert metrics["execution_accuracy"]["passes"] == 3
-    assert metrics["execution_accuracy"]["n"] == 5
+    assert metrics["execution_accuracy"]["n"] == 4
     assert metrics["hallucination_catches"]["n"] == 2
     assert metrics["refusals_correct"] == {
         **metrics["refusals_correct"],

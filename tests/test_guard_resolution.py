@@ -37,14 +37,14 @@ def detail(report, name):
 
 
 def test_a_qualified_column_resolves(session_card, policy):
-    sql = "SELECT o.total_cents FROM orders o"
+    sql = "SELECT o.total_cents FROM orders o LIMIT 5"
     report = guard_sql(sql, session_card, policy)
     assert report.ok
     assert "orders.total_cents" in report.columns_used
 
 
 def test_an_unqualified_column_on_one_table_resolves(session_card, policy):
-    report = guard_sql("SELECT total_cents FROM orders", session_card, policy)
+    report = guard_sql("SELECT total_cents FROM orders LIMIT 5", session_card, policy)
     assert report.ok
     assert report.columns_used == ("orders.total_cents",)
 
@@ -62,18 +62,18 @@ def test_a_join_resolves_both_sides(session_card, policy):
 
 def test_an_unqualified_column_unique_across_a_join_resolves(session_card, policy):
     """`city` is only on `customers`, so it needs no prefix even in a join."""
-    sql = "SELECT city FROM orders o JOIN customers c ON c.id = o.customer_id"
+    sql = "SELECT city FROM orders o JOIN customers c ON c.id = o.customer_id LIMIT 5"
     report = guard_sql(sql, session_card, policy)
     assert report.ok, report.codes
     assert "customers.city" in report.columns_used
 
 
 def test_column_names_are_case_insensitive(session_card, policy):
-    assert guard_sql("SELECT TOTAL_CENTS FROM Orders", session_card, policy).ok
+    assert guard_sql("SELECT TOTAL_CENTS FROM Orders LIMIT 5", session_card, policy).ok
 
 
 def test_an_alias_is_resolved_to_its_real_table(session_card, policy):
-    report = guard_sql("SELECT x.total_cents FROM orders AS x", session_card, policy)
+    report = guard_sql("SELECT x.total_cents FROM orders AS x LIMIT 5", session_card, policy)
     assert report.ok
     assert "orders.total_cents" in report.columns_used
 
@@ -171,12 +171,12 @@ def test_a_second_ambiguous_column_is_also_caught(session_card, policy):
 
 
 def test_qualifying_the_ambiguous_column_fixes_it(session_card, policy):
-    sql = "SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id"
+    sql = "SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id LIMIT 5"
     assert guard_sql(sql, session_card, policy).ok
 
 
 def test_a_shared_column_on_a_single_table_query_is_not_ambiguous(session_card, policy):
-    assert guard_sql("SELECT id FROM orders", session_card, policy).ok
+    assert guard_sql("SELECT id FROM orders LIMIT 5", session_card, policy).ok
 
 
 # --- derived sources: CTEs and subqueries -----------------------------------
@@ -237,7 +237,7 @@ def test_a_correlated_subquery_may_reach_the_outer_query(session_card, policy):
     unknown just because the inner scope has never heard of it."""
     sql = (
         "SELECT o.id FROM orders o WHERE o.total_cents > "
-        "(SELECT AVG(r.amount_cents) FROM refunds r WHERE r.order_id = o.id)"
+        "(SELECT AVG(r.amount_cents) FROM refunds r WHERE r.order_id = o.id) LIMIT 5"
     )
     report = guard_sql(sql, session_card, policy)
     assert report.ok, report.codes

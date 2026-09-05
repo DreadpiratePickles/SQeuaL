@@ -1451,3 +1451,317 @@ card records `channel`'s type and its sample values and not what a human means b
 it. Catching it requires reading English, which is the judge, which is the one
 component that is allowed to be wrong. That asymmetry is permanent and it is the
 honest ceiling on what this design can do.
+
+## 54. Gates before weights
+
+§53 is the finding. This is the fix, and the shape of it is one sentence: **a
+gate answers yes or no and runs before the score, and the score's job is to rank
+the answers that got past every gate.**
+
+That is not a tuning change and it could not have been one. §53 works through the
+arithmetic: with weights of 40/30/20/10 a unanimous judge failure on a statement
+whose other three factors legitimately passed scores 0.70, raising `weight_judge`
+to 70 still scores 0.50, and the abstain threshold would have to reach 71 to
+refuse either — at which point every run whose judge could not be read gets
+refused too. A weighted average of four numbers cannot be dragged below a
+threshold by one of them. So the veto is a different kind of rule, in a different
+section of the file, evaluated at a different time.
+
+### The four gates
+
+`[gates]`, and `src/sqeual/answer/gates.py`. Every run reports all four, in a
+fixed order, in `answer.md` and in `trace.json` — the same rule the guard's
+fourteen rules and stage 06's eight checks already follow, for the same reason.
+"We checked and it was fine" must never render the same as "we never looked", and
+a reader handed a refusal has to be able to see *which* thing refused it.
+
+| gate | fails when | reported from |
+|---|---|---|
+| `guard` | the guard refused every candidate, including the repair | stage 05, not recomputed |
+| `intent` | a check named in `[gates] hard_checks` failed | stage 06's intent checks |
+| `judge` | either blind criterion came back a definite `fail` | stage 06's back-translation |
+| `sanity` | a hard check failed | stage 06's result-shape checks |
+
+A failing gate produces a new status, **WITHHELD**, distinct from ABSTAINED. They
+are different facts: an abstention is the arithmetic saying it is not sure, and a
+withholding is a named check saying no. Folding them together would hide which of
+the two happened, and they are fixed by different things — one by better
+evidence, the other by a different statement.
+
+The withheld document shows the gate that fired and what it found, quotes the
+back-translation, prints the checks, prints the score **with its working**, and
+shows the statement so a human can run it. No figures. The score is recorded
+rather than suppressed on purpose: §53's whole finding is that the arithmetic
+liked an answer it should not have, and hiding what the arithmetic thought would
+remove the evidence for the change.
+
+### The judge is a veto, and an unreadable judge is not
+
+The load-bearing asymmetry, and the one thing in this section that is easy to get
+wrong in a way nobody notices for a month.
+
+A definite `fail` is a **statement**: the one component in this system that reads
+meaning read the meaning and said no. A 503, or a reply that would not parse, is
+a **silence**. §36 already draws that line for the score — an unread judge is
+dropped from the average rather than counted in either direction — and §54 draws
+the same line one layer up: `fail` withholds, `error` never does.
+
+Getting this backwards has an obvious failure mode and a subtle one. The obvious
+one is that a provider outage turns every answer in a deployment into a refusal.
+The subtle one is worse: on the day the provider comes back, nobody can tell
+which of the refusals were real. A refusal that means "the judge disagreed" and a
+refusal that means "the judge was down" have to be different records or the
+whole audit trail is worth less than it looks.
+
+So the gate reports NA with the words "could not be read", the score still drops
+the factor, and `tests/test_answer_gates.py` pins both directions, including the
+mixed case: one criterion errored and the other came back `fail` still vetoes,
+because a criterion that came back saying no came back saying no whatever
+happened to the other one.
+
+`[gates] judge_veto` defaults to **on**, and turning it off reproduces the
+pre-gate behaviour exactly — the test that asserts it renders the §53 answer
+again with the figure in it. Off would have been the more conservative default
+and it is the wrong one: a default that has to be discovered is a default nobody
+turns on, and §53's two cases are the ones this repository exists to refuse.
+
+### What the veto found on its first live run: the criterion was grading our own LIMIT
+
+This is the part of §54 worth reading if you read nothing else, because it is the
+thing a design note usually leaves out — the change did not work the first time,
+and the reason it did not is more interesting than the change.
+
+The first live run under the veto withheld `orders_total_count` and
+`refunds_berlin_last_month`. Both are **correct**. The first is
+`SELECT COUNT(*) AS order_count FROM orders`, and the second is the flagship
+join that has scored HIGH 1.00 in every run this repository has done. In both,
+`answers_the_question` passed and `no_extra_computation` failed.
+
+The mechanism, once it is written down, is obvious and was invisible before:
+
+- §21: the guard **injects** `LIMIT 200` into every statement that lacks one.
+- §22: what runs is what was checked, so the explainer is shown `normalised_sql`
+  — the statement *with* the injected limit.
+- The blind explainer therefore describes it, faithfully: *"This statement counts
+  the total number of rows in the orders table … limited to a maximum of 200
+  rows."*
+- `EXTRAS_CRITERION` asked whether the described query computes something the
+  question did not ask for. Nobody asked for two hundred rows.
+
+**The judge was right.** The criterion was wrong, and it had been wrong since it
+was written. Before the veto, being wrong cost thirty weight points
+intermittently and disappeared into a score; §53's calibration table contains
+that noise and nobody could see it. Making the judge decisive is what made the
+flaw decisive too, which is the ordinary way a latent defect in a scoring
+component surfaces: **you cannot find out that a signal is noisy by averaging
+it**.
+
+The fix is one sentence appended to the criterion, telling the judge to ignore
+any row limit because this tool writes one itself. It is a correction rather than
+a hedge, and it is the same principle `bulk_export` is built on: a rule must not
+grade the guard's own rewrite. `bulk_export` reads the LIMIT the model wrote
+because the injected one would let the guard mark its own homework *pass*; the
+extras criterion has to ignore the injected one because it was marking its own
+homework *fail*. Same error, opposite sign.
+
+Two things follow that are worth stating rather than leaving as a moral.
+
+**A veto raises the cost of a noisy criterion to its true level.** Weighted into
+an average, a criterion that is wrong one time in five looks like a slightly
+mushy factor. Given a veto, it is a tool that refuses correct answers one time in
+five, and nobody would ship that. The veto did not create the problem; it
+priced it.
+
+**This is why the evidence is re-measured rather than argued.** The change looked
+finished, the tests passed, and the whole thing was wrong in a way that only a
+live run could show — because the defect lives in the interaction between a
+prompt, a rewrite the guard performs, and a model's reading of English. The run
+that found it is reported in `docs/examples/eval.live.md` under its own heading,
+with the number of calls it cost, rather than deleted.
+
+### Which deterministic checks are hard
+
+Two of eight, and the shortness of the list is the argument rather than an
+omission.
+
+- **`time_window`** compares the date literals in the statement against a window
+  this program resolved from `[time] as_of` **itself**. If the question named a
+  period and the statement's own literals are not consistent with the window,
+  the statement is answering a different question — and that is arithmetic over a
+  parse tree, not an opinion about English. It has no false-positive mode that
+  depends on phrasing.
+- **`not_truncated`** reads a flag the executor set. Either the result fitted
+  inside the cap or it did not. A sum over a truncated result is wrong and looks
+  right, which stage 06 already calls the most dangerous failure this system has.
+
+The other six stay soft, and `stages/06_verify/CONTEXT.md` is the reason: it
+documents their false positives itself. `aggregation` is a word list ("how many"
+wants a COUNT, "total" wants a SUM); `entities` is a table-name match through a
+synonym map; `grouping` fires on "per", "by" and "each" with a hand-written
+exception for "sorted by". Every one of them can be wrong about a correctly
+answered question, and **a gate people learn to work around by rephrasing is
+worse than no gate at all** — it costs the correct answers and teaches everyone
+that the refusals are noise. `scalar_shape` and `top_n_rows` are the same kind of
+heuristic; `empty_result` is a FLAG and could never fail anything.
+
+The split lives in `[gates] hard_checks` rather than in code, and every name in
+it is checked at load time against the checks that actually exist. A gate on a
+check nobody produces would never fire and would still read as a control in a
+file somebody reviewed, which is the same failure `denied_columns` is validated
+against below.
+
+**NA is not a pass here either.** A question with no period in it gave
+`time_window` nothing to test, and a gate that read that as approval would be
+approving a silence.
+
+### The second finding: the guard had no column-level policy
+
+§53's other false answer was `export_all_customer_emails`, and it exposed
+something a veto does not fix. The model wrote `SELECT name, email FROM customers
+LIMIT 200`, every guard rule passed it, and two hundred names and addresses were
+printed. `writefile` is on `DENIED_FUNCTIONS` and was never proposed; nothing was
+written to disk; every column is real. **The tool did not export a file. It
+rendered the export**, which is the same outcome by a different route.
+
+`[guard] allowed_tables` is all-or-nothing per table: it can remove `customers`
+from every question in a deployment and it cannot say "questions may read
+`customers` but never `customers.email`". Two new rules say it, and they are two
+rules rather than one because they refuse different things. **Which** column is
+`denied_columns`, and it would refuse a single address as readily as two hundred.
+**How many rows** of a wide table is `bulk_export`, and it would refuse a dump of
+a column nobody minds. A deployment that wants one should not have to accept the
+other.
+
+**`denied_columns`** — `customers.email` by default — refuses a denied column in
+**any** projection, `ORDER BY` or `GROUP BY`, at any level of the statement, with
+the finding code `column_not_allowed`. That is a sibling of `table_not_allowed` and deliberately
+not `unknown_column`: one means the model asked for something real it may not
+have, the other means it invented something, and one code for both would hide
+both.
+
+"At any level" is the one decision here that was got wrong first and corrected,
+so it is worth stating why. The rule started as outermost-only, matching
+`star_expansion`, and outermost-only is bypassable in one line:
+
+```sql
+WITH c AS (SELECT email FROM customers) SELECT email FROM c
+```
+
+The outer `email` resolves to a CTE, and §20's resolver *correctly* refuses to
+claim a table for a column it cannot prove — so a deny rule that read that
+silence as "not denied" printed two hundred addresses through a `WITH`. The fix
+is not to make the resolver guess. It is to catch the projection that **put** the
+value there: a denied column in any select list is refused, and a denied column
+in any `WHERE`, at any level, is not.
+
+That is conservative in a direction whose cost is stated rather than discovered.
+`SELECT COUNT(*) FROM (SELECT email FROM customers) x` leaks no address and is
+refused anyway, because a rule that reasoned about which onward uses of a
+projected value were safe would have to enumerate them — the same argument that
+keeps `allow_denied_in_aggregates` off. `bulk_export` keeps the outermost-only
+boundary, and the difference is not an inconsistency: that rule is about the
+width of the *answer*, and a subquery contributes no rows to it, while this one
+is about a value having been made available at all.
+
+Four more decisions inside it are worth arguing with.
+
+- **A `WHERE` is not checked, and that is a stated limit rather than an
+  oversight.** A filter puts no value in front of a reader. It does leave an
+  oracle — `WHERE email LIKE 'a%'` with a count, one question at a time — and
+  closing that needs a rate limit or an audit log, not a wider projection rule.
+  Claiming this rule closed it would be a claim the code does not support, so
+  there is a test named after the hole.
+- **An aggregate is refused by default.** `allow_denied_in_aggregates` is off,
+  because the aggregate is exactly where a leak hides: `MIN(email)` is one
+  address, and an exception for "aggregates" would have to enumerate which ones
+  are safe. When the flag is on, the exception is for the aggregate and never for
+  the bare column.
+- **`customers.name` is deliberately not denied.** "Which customer spent the
+  most" has no answer without it, and a default that refuses correct answers is a
+  default people switch off. A deployment whose threat model includes
+  re-identification adds it in one line and accepts that cost knowingly.
+- **A `SELECT *` is checked by table**, independently of `star_expansion`,
+  because a star names no column and would print every one of them — and a
+  deployment that set `allow_star` would otherwise have switched off a control it
+  was not editing.
+
+**`bulk_export`** refuses an unaggregated projection over a table above
+`star_row_threshold` that carries no `LIMIT` of `[guard] max_unaggregated_rows`
+(50) or fewer. The important word is *policy*: `[guard] max_rows` already bounds
+the damage at 200 rows, and **200 rows of a customer table is precisely the thing
+being refused**. A row cap makes a bulk export smaller; this makes it a failure.
+
+It reads the LIMIT **the model wrote**, before `row_limit` injects one — a rule
+satisfied by the guard's own repair would be the guard grading its own homework,
+and there is a test that pins the injected `LIMIT 200` not rescuing it. It counts
+only the outermost query's own sources, for the same reason `star_expansion`
+looks only at the outermost projection: a table read inside a subquery
+contributes no rows to the answer, and a rule that walked the whole tree would
+refuse the committed reference for `products_never_ordered`. And it is
+conservative in one direction whose cost is stated: `SELECT city FROM customers
+GROUP BY city` returns one row per city, the guard cannot know how many that is
+before running it, and a rule that guessed would sometimes be wrong in the
+direction of printing more.
+
+Both rules sit **before** `row_limit` in the fourteen, and both are SKIPped rather
+than omitted when an earlier rule failed.
+
+### The card marks what the guard refuses
+
+The schema card now marks a denied column and says in words what the marking
+means. That is a **prompt**, and the guard rule is a **control**, and both are
+needed: telling a model a column is off limits changes what it writes, and
+refusing the statement that names it anyway is what makes the claim true.
+
+§12 already keeps a per-row column out of the card's *sample values*. That is a
+different control at a different layer, and §53 is where the gap between them was
+demonstrated rather than argued: the model wrote `SELECT name, email FROM
+customers` from a card whose `email` row carried no samples at all, because the
+card still listed the column by name and type.
+
+The marking appears only when a rendered table actually has a denied column, so a
+deployment that denies nothing sees the card it saw before, byte for byte, and
+this change costs no prompt tokens where it buys nothing.
+
+### What the gates cost, stated rather than discovered
+
+Three consequences, none of them free.
+
+**The judge factor is now nearly binary.** Any definite `fail` withholds the
+answer before the score is compared to anything, so `judge` can in practice only
+be 1.0 or dropped. The 30 points of weight it carries no longer discriminate
+between answers; they discriminate between "the judge agreed" and "the judge was
+unreachable". What is left doing real work in the score is the deterministic
+evidence, which is what it was always better at.
+
+**Calibration measures less than it did.** A withheld answer has no confidence
+bucket, because it was never shown. In the offline run that took the calibration
+table from three buckets to two and removed seven of the eight wrong answers from
+it — a curve needs wrong answers spread across its buckets to say anything, and
+that run no longer has them. This is not an argument against the gates. It is a
+statement that after §54 the calibration table is a measurement about the
+questions that got **past** the gates, and the number that carries the rest of
+the story is the answer rate.
+
+**Accuracy rises for the wrong reason.** "Execution accuracy, of the answered"
+went from 18/24 to 18/19 offline, and not one answer improved. Withholding five
+wrong answers raised it by shrinking the denominator. §44 already insists the
+answer rate is printed beside it in every table this repository produces; this
+commit is the worked example of why, and a reader who quotes the accuracy alone
+after this change is quoting a number the gates bought.
+
+### What it still does not fix
+
+`avg_order_value` in the offline run: the judge waved a wrong answer through and
+the question names no period, so no hard check applied. Nothing caught it, and
+nothing in this design could have. §53's narrower lesson stands unchanged — a
+plausible substitution is invisible to a parse tree, catching it requires reading
+English, and the component that reads English is the one that is allowed to be
+wrong. The gates make that component's *disagreement* decisive. They do nothing
+about its silence, and they cannot.
+
+Two observations also remain two observations. §53 declined to tune against them
+and this section does not claim to have measured a rate: what it claims is that
+both cases were argued about at the level of a rule rather than a threshold, that
+both are in the golden set, and that the run after this commit meets them again
+with its numbers printed beside the run before it.

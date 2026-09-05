@@ -83,3 +83,64 @@ def test_the_card_is_markdown_a_person_can_read(session_card):
     assert text.startswith("# ")
     assert text.endswith("\n")
     assert "| column | type |" in text
+
+
+# --- denied columns --------------------------------------------------------
+#
+# §12 keeps a per-row column out of the card's *sample values*, because a value
+# per row teaches a model nothing and hands it real content. That is a different
+# control from this one, at a different layer: a column absent from the samples
+# is still a column a model can name, because the card lists it by name and
+# type. The first live evaluation is what proved the gap — the model wrote
+# `SELECT name, email FROM customers` from a card whose `email` row carried no
+# samples at all. docs/design.md §54.
+
+
+DENIED = frozenset({"customers.email"})
+
+
+def test_a_denied_column_is_marked_in_the_card(session_card):
+    text = render_card(session_card, tables=("customers",), denied_columns=DENIED)
+    row = next(line for line in text.splitlines() if line.startswith("| email |"))
+    assert "denied" in row
+
+
+def test_the_card_says_what_denied_means_in_words(session_card):
+    """A marker a model has to infer is a marker a model will ignore."""
+    text = render_card(session_card, tables=("customers",), denied_columns=DENIED)
+    assert "may not appear" in text
+    assert "SELECT list" in text
+
+
+def test_an_undenied_column_on_the_same_table_is_not_marked(session_card):
+    text = render_card(session_card, tables=("customers",), denied_columns=DENIED)
+    row = next(line for line in text.splitlines() if line.startswith("| city |"))
+    assert "denied" not in row
+
+
+def test_a_column_of_the_same_name_on_another_table_is_not_marked(session_card):
+    """The policy names `customers.email`. `products.name` is a product name."""
+    text = render_card(
+        session_card, tables=("products",), denied_columns=frozenset({"customers.name"})
+    )
+    row = next(line for line in text.splitlines() if line.startswith("| name |"))
+    assert "denied" not in row
+    assert "policy" not in text
+
+
+def test_a_card_with_nothing_denied_is_byte_identical_to_the_old_one(session_card):
+    """The extra column appears only where it says something. A deployment that
+    denies nothing sees the card it saw before, so this change costs no prompt
+    tokens where it buys nothing."""
+    assert render_card(session_card, denied_columns=frozenset()) == render_card(session_card)
+
+
+def test_denying_a_column_on_a_table_outside_the_slice_changes_nothing(session_card):
+    text = render_card(session_card, tables=("orders",), denied_columns=DENIED)
+    assert render_card(session_card, tables=("orders",)) == text
+
+
+def test_marking_is_deterministic(session_card):
+    first = render_card(session_card, tables=("customers",), denied_columns=DENIED)
+    second = render_card(session_card, tables=("customers",), denied_columns=DENIED)
+    assert first == second

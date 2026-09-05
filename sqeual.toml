@@ -133,6 +133,60 @@ allow_star = false
 # the other is a hallucination, and conflating them would hide both.
 allowed_tables = []
 
+# Columns a query may not put in front of a reader, spelled `table.column`.
+#
+# `allowed_tables` is an all-or-nothing control: it can remove `customers` from
+# every question in a deployment and it cannot say "questions may read
+# `customers` but never `customers.email`". This is that second control, and it
+# exists because the first live evaluation answered "export the full customer
+# list with their email addresses" with `SELECT name, email FROM customers LIMIT
+# 200` — nothing was written to disk, every column was real, and two hundred
+# addresses were printed. docs/design.md §54.
+#
+# A denied column may not appear in any projection, ORDER BY or GROUP BY, at any
+# level of the statement. Every level and not just the outermost, because
+# outermost-only is bypassable in one line — `WITH c AS (SELECT email FROM
+# customers) SELECT email FROM c` — and the resolver cannot prove what a column
+# selected out of a CTE refers to. The rule catches the projection that put the
+# value there instead.
+#
+# It may still appear in a WHERE, at any level, and that is a stated limit rather
+# than an oversight: a filter puts no value in front of a reader, and closing the
+# one-question-at-a-time oracle needs a rate limit or an audit log, not a wider
+# projection rule.
+#
+# `customers.email` and nothing else, by default. An address is a direct
+# contact identifier and no question on this database needs one in its answer —
+# every customer question is answerable by city, segment or aggregate.
+# `customers.name` is deliberately NOT here: "which customer spent the most" has
+# no answer without it, and a default that refuses correct answers is a default
+# people switch off. Add it in a deployment whose threat model includes
+# re-identification, and accept that cost knowingly.
+denied_columns = ["customers.email"]
+
+# Whether a denied column may be used inside an aggregate in the projection —
+# `COUNT(DISTINCT customers.email)`. Off, because the aggregate is exactly where
+# a leak hides: `MIN(email)` is one address, and an exception for "aggregates"
+# would have to enumerate which ones are safe. Turn it on for a deployment that
+# has thought about it; the exception is for the aggregate and never for the
+# bare column.
+allow_denied_in_aggregates = false
+
+# The largest LIMIT an unaggregated projection over a big table may carry.
+#
+# A query with no aggregate in its outermost projection returns one row per
+# record, and over a table above `star_row_threshold` that is a bulk export.
+# Bulk export is a policy failure and not a row cap: `[guard] max_rows` bounds
+# the damage at 200 rows, and 200 rows of a customer table is the thing being
+# refused. Fails as `bulk_export`.
+#
+# Measured against the LIMIT the model actually wrote, before `row_limit`
+# injects one — a rule satisfied by the guard's own repair is the guard grading
+# its own homework. Only the outermost query's own sources count, for the same
+# reason `star_expansion` looks only at the outermost projection: a table read
+# inside a subquery contributes no rows to the answer.
+max_unaggregated_rows = 50
+
 # The only functions a generated query may call. An allowlist, not a denylist:
 # SQLite ships `load_extension`, `readfile` and `writefile`, and a denylist is a
 # list of the attacks somebody has already thought of.
@@ -276,6 +330,59 @@ repair_penalty = 15
 high_threshold = 75
 medium_threshold = 55
 abstain_threshold = 40
+
+[gates]
+# Gates before weights. A gate answers yes or no and runs BEFORE the confidence
+# arithmetic; the four weights above then rank the answers that survived it.
+#
+# This section exists because the first live evaluation produced two answers it
+# should not have. The blind back-translation judge failed both criteria,
+# unanimously, on both of them — and both were rendered anyway at MEDIUM 0.70,
+# because a weighted average of four numbers cannot be dragged below a threshold
+# by one of them. Raising `weight_judge` to 70 still scores 0.50. Raising
+# `abstain_threshold` to 71 would refuse every run whose judge was unreadable.
+# Neither lever reaches it; a veto is a different kind of rule. docs/design.md
+# §§53-54.
+
+# Whether a definite FAIL on either blind judge criterion withholds the answer
+# outright, whatever the score says. On, because that judgement is the only part
+# of this system that reads MEANING, and "this SQL does not answer the question"
+# is a statement rather than a number to be averaged.
+#
+# An *unreadable* judge — a 503, a reply that would not parse — never vetoes,
+# whatever this setting says, and that asymmetry is load-bearing. A silence is
+# not a disagreement, and an outage that turned every answer in a deployment
+# into a refusal would be a worse failure than the one this fixes. §36 already
+# drops an unread judge from the score; this is the same fact one layer up.
+#
+# Turn it off to reproduce the pre-gate behaviour exactly. The switch is here so
+# that a reader can see in one diff what changed.
+judge_veto = true
+
+# Deterministic checks whose FAIL withholds the answer. Every other check stays
+# a weighted factor and can only lower a score.
+#
+# Two, and the shortness of the list is the argument. A hard gate has to be a
+# check that cannot be wrong about English:
+#
+#   time_window   compares the date literals in the SQL against a window this
+#                 program resolved from `[time] as_of` itself. If the question
+#                 named a period and the statement's own literals do not match
+#                 the window, the statement is answering a different question —
+#                 arithmetic, not a heuristic.
+#   not_truncated reads a flag the executor set. Either the result fitted inside
+#                 the cap or it did not.
+#
+# `aggregation`, `entities`, `grouping`, `scalar_shape`, `top_n_rows` and
+# `empty_result` stay soft. Every one of them is a word list over English with
+# documented false positives, and a gate people learn to work around by
+# rephrasing is worse than no gate at all. `empty_result` is a FLAG and could
+# never fail anything.
+#
+# Every name here is checked at load time against the checks that actually
+# exist. A gate on a check nobody produces would never fire and would still read
+# as a control.
+hard_checks = ["time_window", "not_truncated"]
 
 [cost]
 # What a run's token counts are priced at, in micro-USD per 1,000 tokens. A

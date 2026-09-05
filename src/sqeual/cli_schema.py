@@ -59,7 +59,7 @@ def command_schema_show(args: argparse.Namespace, config, echo: Echo) -> bool:
     names = None
     if args.tables:
         names = tuple(name.strip() for name in args.tables.split(",") if name.strip())
-    echo(render_card(card, names))
+    echo(render_card(card, names, denied_columns=config.guard.denied_columns))
     return True
 
 
@@ -85,5 +85,5 @@ def command_schema_slice(args: argparse.Namespace, config, echo: Echo) -> bool:
         echo(f"  {index}. {entry.table:<14} {entry.reason}")
     if args.card:
         echo("")
-        echo(render_card(card, result.tables))
+        echo(render_card(card, result.tables, denied_columns=config.guard.denied_columns))
     return True

@@ -287,6 +287,33 @@ def _resolve_unqualified(
     )
 
 
+def resolve_one(
+    column: exp.Column, statement: exp.Expression, card: SchemaCard
+) -> str | None:
+    """`Table.column` for one reference, or `None` when it cannot be proved.
+
+    The same resolution `resolve_columns` performs, exposed for one reference at
+    a time so that a rule interested in *where* a column appears — the outermost
+    projection, an ORDER BY — can ask about that reference rather than about the
+    whole statement. There is one resolver in this package and this is it; a
+    second one would be a second thing that can disagree with the schema.
+
+    `None` covers every case the resolver refuses to claim: an opaque source, a
+    CTE, an output alias, a table the card does not have. A caller building a
+    *deny* rule must read `None` as "not proved denied" and not as "proved
+    allowed" — which is why the star case is checked separately, by table.
+    """
+    chain = _scope_chain(column)
+    if not chain:
+        return None
+    ctes = _cte_definitions(statement)
+    if column.table:
+        resolved, _ = _resolve_qualified(column, chain, card, ctes)
+    else:
+        resolved, _ = _resolve_unqualified(column, chain, card, ctes)
+    return resolved
+
+
 def resolve_columns(statement: exp.Expression, card: SchemaCard) -> Resolution:
     """Resolve every column in `statement` against `card`."""
     ctes = _cte_definitions(statement)

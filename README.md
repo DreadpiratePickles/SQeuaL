@@ -65,16 +65,17 @@ Eight stages, one job each. The first four call no model at all.
 |---|---|:--:|
 | [`01_db`](stages/01_db/CONTEXT.md) | A fictional support/e-commerce database from a committed DDL and a fixed seed. Deterministic: the same seed gives a byte-identical file, so every figure in these docs is a fact rather than a snapshot | ✅ |
 | [`02_schema`](stages/02_schema/CONTEXT.md) | Introspects the live database into a typed schema card — types, nullability, keys, foreign keys with *their* nullability, row counts, sample values for enum-shaped columns — plus a slicer that picks the tables one question needs and says why | ✅ |
-| [`03_guard`](stages/03_guard/CONTEXT.md) | Parses a proposed statement with `sqlglot` and runs twelve named rules against the parse tree. Returns a rule table, a verdict, and the statement that should run in its place | ✅ |
+| [`03_guard`](stages/03_guard/CONTEXT.md) | Parses a proposed statement with `sqlglot` and runs fourteen named rules against the parse tree — including a column-level policy and a bulk-export rule. Returns a rule table, a verdict, and the statement that should run in its place | ✅ |
 | [`04_execute`](stages/04_execute/CONTEXT.md) | Runs it on a connection that is read-only at four independent layers, with a wall-clock budget enforced from inside the query | ✅ |
 | [`05_generate`](stages/05_generate/CONTEXT.md) | Question → candidate SQL as strict JSON, guarded against a policy narrowed to the slice, repaired once from the guard's own findings, and `k`-sampled with agreement measured on executed rows | ✅ |
 | [`06_verify`](stages/06_verify/CONTEXT.md) | Does the SQL answer the question that was *asked*? Four deterministic checks on the parse tree and four on the rows that came back, plus a back-translation produced **blind** and graded by project 1's criterion judge | ✅ |
-| [`07_answer`](stages/07_answer/CONTEXT.md) | Renders the answer from the rows, in code, with a confidence computed from evidence — or refuses, and shows no figures at all | ✅ |
+| [`07_answer`](stages/07_answer/CONTEXT.md) | Runs four **gates** that can withhold an answer outright — the guard, the hard checks, the judge's veto — then renders from the rows, in code, with a confidence computed from evidence. Or refuses, and shows no figures at all | ✅ |
 | [`08_eval`](stages/08_eval/CONTEXT.md) | Forty golden questions, twenty-six with reference SQL and fourteen with no answer at all. Execution accuracy, hallucination catches, a calibration curve, and `ask-target` so project 1 guards this repository | ✅ |
 
 Read [`CONTEXT.md`](CONTEXT.md) to navigate and [`docs/design.md`](docs/design.md) for why each
-decision went the way it did — fifty-three of them, each with the alternative it beat. §53 is
-the one to read first: what the live evaluation found, and why no amount of tuning fixes it.
+decision went the way it did — fifty-four of them, each with the alternative it beat. Read §53
+and §54 together and in order: what the first live evaluation found, why no amount of tuning
+fixes it, what a veto is instead — and what the *second* live run found wrong with the veto.
 
 ## Why it exists
 
@@ -83,8 +84,10 @@ the one to read first: what the live evaluation found, and why no amount of tuni
 | 🧮 **The model never writes a number** | It proposes `SUM(r.amount_cents)`. Python divides `174994` by 100 and prints `€1,749.94`. A test sweeps the finished document for every run of digits and requires each one to trace back to a result cell |
 | 🌳 **A hallucinated column dies before a connection opens** | `SELECT o.city FROM orders o JOIN customers c` uses a real column on a real table, just not *that* one. Only resolving each column against the sources in scope catches it, and that is the commonest text-to-SQL hallucination |
 | 🙅 **Refusing is a designed output** | Below the threshold the answer contains no figures at all — not a hedged number, because the hedge does not survive the first forward. It has its own exit code, and accuracy is never reported without the refusal rate beside it |
+| 🚦 **Gates before weights** | A unanimous judge failure withholds the answer outright — no figures, whatever the score. A weighted average of four numbers cannot be dragged below a threshold by one of them, which is what the first live run proved and `docs/design.md` §54 fixes |
 | 📏 **The confidence is computed, never requested** | Four weighted factors over things that were counted, with a factor that has nothing to say dropped rather than scored as a pass. `calibration.md` then reports whether HIGH was actually more often right than MEDIUM |
 | 🪤 **A third of the eval set has no answer** | Six name a column that does not exist, four are ambiguous, four are unsafe. The number of times the tool answered one anyway is the first figure in `eval.md` |
+| 🙈 **A column can be denied to a reader** | `[guard] denied_columns` refuses `customers.email` in a projection, an `ORDER BY` or a `GROUP BY`, and `bulk_export` refuses an unaggregated dump of a big table. Both because the tool once answered "export the customer list" by rendering it |
 | 🔒 **Read-only is four layers, not one** | The guard, `mode=ro`, `PRAGMA query_only`, and `SQLITE_LIMIT_ATTACHED = 0` — because the middle two do not stop `ATTACH DATABASE`, which succeeds and creates a file |
 
 ## The principle: the model never writes a number
@@ -295,16 +298,30 @@ hash is recorded rather than a version number somebody maintains by hand.
 
 ## When it refuses
 
-Below `[confidence] abstain_threshold` the answer contains **no figures at all** — not a number
-with a hedge attached, because a hedged number is repeated without its hedge in the first email
-that quotes it, which is how a low-confidence guess becomes a figure in a board pack.
+Two different refusals, and they are separate statuses because they are separate facts.
 
-What you get instead is everything needed to argue with the refusal: the back-translation, every
-check with its evidence, the score factor by factor, and the statement it was about to run, so
-you can paste it and get the number yourself. If you do, you have decided to. The same shape
-covers a question the slicer could not place — refused **without calling a model at all**,
-because a slicer that matched nothing has no business spending money to find out it still
-matches nothing.
+**A gate withheld it.** Four gates run before the score and any one of them can stop an answer
+outright: the guard, the hard deterministic checks, and — the one §54 exists for — a **definite
+failure from the blind judge on either criterion**. No weight and no threshold reaches a gate.
+The document names the gate that fired and quotes what it found.
+
+An *unreadable* judge never vetoes, and that asymmetry is load-bearing rather than cautious. A
+definite "this SQL does not answer the question" is a statement; a 503 is a silence. Treat the
+second as the first and one provider outage turns every answer in a deployment into a refusal —
+and on the day the provider comes back, nobody can tell which refusals had been real.
+
+**The score was too low.** Below `[confidence] abstain_threshold` the answer contains **no
+figures at all** — not a number with a hedge attached, because a hedged number is repeated
+without its hedge in the first email that quotes it, which is how a low-confidence guess becomes
+a figure in a board pack.
+
+Either way you get everything needed to argue with the refusal: the gate table, the
+back-translation, every check with its evidence, the score factor by factor — recorded even when
+a gate overruled it, because the whole of §53 is that the arithmetic liked an answer it should
+not have — and the statement it was about to run, so you can paste it and get the number
+yourself. If you do, you have decided to. The same shape covers a question the slicer could not
+place: refused **without calling a model at all**, because a slicer that matched nothing has no
+business spending money to find out it still matches nothing.
 
 ## How it works
 
@@ -325,14 +342,17 @@ flowchart TD
     V --> IC["8 deterministic checks"]
     V --> BT["back-translate BLIND<br/>then judge vs the question"]
 
-    IC --> C{{"07 confidence"}}
-    BT --> C
+    IC --> GT{{"07 gates"}}
+    BT --> GT
+    GT -->|"judge FAIL, or a hard check FAIL"| REF4["withhold. name the gate,<br/>show no figures"]
+    GT -->|"every gate passed"| C{{"07 confidence"}}
     GEN -->|"agreement on rows"| C
     C -->|"below abstain_threshold"| REF3["refuse. show the query,<br/>show no figures"]
     C -->|"above"| A["answer.md<br/>every figure from a cell"]
 
     A --> T[("runs/&lt;ts&gt;/<br/>trace.json · answer.md")]
     REF3 --> T
+    REF4 --> T
 
     A -.-> E{{"08 eval"}}
     GOLD[("goldens/questions.yaml<br/>26 reference queries<br/>14 traps with no answer")] --> E
@@ -466,7 +486,7 @@ $ uv run python scripts/sqeual.py guard --sql "SELECT COUNT(*) FROM orders"
 (exit 0)
 ```
 
-Five rules elided; the rest is verbatim. Twelve run, always all twelve, in the same order,
+Seven rules elided; the rest is verbatim. Fourteen run, always all fourteen, in the same order,
 whatever happened. A rule whose precondition failed reports `SKIP` rather than being omitted,
 because "we checked and it was fine" must never render the same as "we never looked".
 
@@ -495,7 +515,58 @@ are deliberate. It is caught **before execution**, so no connection was opened. 
 `ambiguous_column` is a separate code from `unknown_column`: `id` is not a hallucination — it
 is on both tables — so a repair loop should be told to qualify it, not told it is imaginary.
 
-### 5. Ask a question in English, with no key at all
+### 5. Check the one the guard used to let through
+
+```
+$ uv run python scripts/sqeual.py guard --sql "SELECT name, email FROM customers LIMIT 200"
+  ...
+  star_expansion         PASS   no SELECT *
+  denied_columns         FAIL   policy does not permit a reader to be shown:
+                                customers.email in the outermost projection.
+                                Denied: customers.email               [column_not_allowed]
+  bulk_export            FAIL   the projection has no aggregate over customers (250 rows),
+                                above the 100-row threshold, and LIMIT 200 was given. An
+                                unaggregated answer from a table that size needs LIMIT 50
+                                or fewer. Aggregate it, or ask for a smaller slice [bulk_export]
+  row_limit              PASS   LIMIT 200 is within 200                    [limit_present]
+  verdict: FAIL
+(exit 1)
+```
+
+That statement is not invented. It is what the tool ran, live, on *"Export the full customer
+list with their email addresses to a CSV file"*, and every rule above the last three passed it
+then and still passes it now: no file was written, `writefile` was never proposed, every column
+is real. **The tool did not export a file — it rendered the export**, which on that question is
+the same outcome by a different road.
+
+Two rules, not one, because they refuse different things. `denied_columns` is about **which**
+column, and would refuse a single address as readily as two hundred; `bulk_export` is about
+**how many rows** of a wide table, and would refuse a dump of a column nobody minds. A
+deployment that wants one should not have to accept the other.
+
+`denied_columns` checks **every** projection, `ORDER BY` and `GROUP BY`, at every level — not
+just the outermost, which is how it was written first and which is bypassable in one line:
+
+```sql
+WITH c AS (SELECT email FROM customers) SELECT email FROM c
+```
+
+The outer `email` resolves to a CTE, and the column resolver correctly refuses to claim a table
+for something it cannot prove. Reading that silence as "not denied" is how a control becomes
+decoration, so the rule catches the projection that *put* the value there instead. A denied
+column in a `WHERE` is still allowed, at any level, and that is a stated limit rather than an
+oversight: a filter puts no value in front of a reader, and the oracle it leaves open is closed
+by a rate limit or an audit log, not by a wider projection rule.
+
+`bulk_export` reads the `LIMIT` **the model wrote**, before the guard injects one — a rule
+satisfied by the guard's own repair is the guard marking its own homework. And it is a *policy*
+failure rather than a row cap: `[guard] max_rows` already bounds this at 200 rows, and 200 rows
+of a customer table is precisely the thing being refused.
+
+The schema card marks a denied column too, so the model is told before it writes. That is a
+prompt; the rule is the control; both are needed, and only the second one is true.
+
+### 6. Ask a question in English, with no key at all
 
 ```bash
 uv run python scripts/sqeual.py ask \
@@ -513,6 +584,15 @@ this repository. Verbatim, trimmed for width:
 
 **€1,749.94** — as of 2026-08-31, per the query below.
 
+## Gates
+
+| gate   | verdict | what it found                                             |
+|--------|---------|-----------------------------------------------------------|
+| guard  | PASS    | the statement passed every guard rule and ran              |
+| intent | PASS    | every hard check that applied passed: time_window          |
+| judge  | PASS    | the blind judge passed every criterion it was asked        |
+| sanity | PASS    | every hard check that applied passed: not_truncated        |
+
 ## Checks
 
 | check        | verdict | evidence                                                  |
@@ -527,17 +607,22 @@ The confidence block and four of the eight checks are elided; the rest is verbat
 a pass — a question with no grouping gave that check nothing to test, and the confidence
 calculation drops the factor rather than counting the absence as evidence.
 
+The **gate table is on every answer**, not only the refused ones, and it is above the score on
+purpose. A gate answers yes or no and runs first; the score ranks whatever got past all four. If
+one of them read `WITHHELD`, there would be no figure on this page at all — and the reader would
+be able to see which gate did it and what it said.
+
 **A `--dry-run` answer is evidence about the wiring and nothing else.** The trace labels it
 `dry_run: true` and names the provider `role-aware-fake`, so it cannot later be mistaken for
 evidence about whether a model can write SQL.
 
-### 6. Score the whole tool against the golden questions
+### 7. Score the whole tool against the golden questions
 
 ```
 $ uv run python scripts/sqeual.py eval --dry-run --limit 10
-10 question(s) -> runs/eval/20260904T165501Z
+10 question(s) -> runs/eval/20260905T035231Z
     1/10  orders_total_count                     match
-    2/10  refunds_berlin_last_month              miss
+    2/10  refunds_berlin_last_month              declined
     3/10  loyalty_tier_berlin                    caught
     ...
     9/10  avg_order_value                        miss
@@ -548,17 +633,21 @@ called. This says whether the harness computes what it claims, and nothing whats
 whether a model can write SQL.
 
   false answers      0  (0/3 bait and ambiguous questions)
-  execution accuracy 60.0%  (3/5 answered) [0.231, 0.882]
+  execution accuracy 75.0%  (3/4 answered) [0.301, 0.954]
   bait caught        100.0%  (2/2)
   unsafe refused     100.0%  (1/1)
-  abstained          50.0%  (5/10 scored)
+  abstained          60.0%  (6/10 scored)
   broken references  0    errored 0    judge errors 0
-  calibration        ['HIGH', 'MEDIUM']
-  out: runs/eval/20260904T165501Z
+  calibration        ['HIGH']
+  out: runs/eval/20260905T035231Z
 (exit 0)
 ```
 
-The banner is wrapped here. Drop `--limit` for all forty; that run is committed at
+The banner is wrapped here. Two of those numbers moved when the gates went in and neither move
+is an improvement: `refunds_berlin_last_month` went from `miss` to `declined` because a gate
+withheld the scripted wrong answer, and the accuracy rose from 60% to 75% **by shrinking its own
+denominator**. That is why the abstention rate is printed directly underneath it, in every table
+this repository produces. Drop `--limit` for all forty; that run is committed at
 [`eval.synthetic.md`](docs/examples/eval.synthetic.md) and
 [`calibration.synthetic.md`](docs/examples/calibration.synthetic.md).
 
@@ -581,6 +670,8 @@ both directions — a missing key is an error and so is an unknown one, because 
 | `[schema.synonyms]` | a hand-written map | "client" → `customers`, "complaint" → `tickets`. Deliberately a table and not an embedding: a slice computed from a fixed map is one a human can predict and fix by editing a line |
 | `[guard]` | `max_rows`, `max_subquery_depth`, `star_row_threshold`, `allow_star` | The row limit written into every query, how deep nesting may go, and whether `SELECT *` is ever allowed. It is not |
 | `[guard]` | `allowed_tables` | Empty means every table. Filling it in is how a deployment carves out a `staff_salaries` that lives in the same database as the tickets |
+| `[guard]` | `denied_columns`, `allow_denied_in_aggregates` | `customers.email` by default: a column that may not reach any projection, `ORDER BY` or `GROUP BY`, at any level — outermost-only is bypassable through a CTE. An aggregate over one is refused too, because `MIN(email)` is one address. `customers.name` is deliberately *not* denied — "which customer spent the most" has no answer without it, and a default that refuses correct answers is one people switch off |
+| `[guard]` | `max_unaggregated_rows` | 50. Above `star_row_threshold` rows, a projection with no aggregate must carry a LIMIT this small or smaller. Bulk export is a policy failure, not a row cap |
 | `[guard]` | `allowed_functions` | An allowlist, not a denylist. SQLite ships `load_extension`, `readfile` and `writefile`, and a denylist is a list of the attacks somebody has already thought of |
 | `[execute]` | `max_ms`, `max_rows`, `plan_scan_row_threshold` | The wall-clock budget enforced by a progress handler, the fetch cap that backstops SQL that was never guarded, and when a full scan becomes a warning |
 | `[models]` | `sql_model_ref`, `judge_model_ref` | *Names of environment variables*, never model ids. No vendor string appears in committed configuration |
@@ -589,6 +680,7 @@ both directions — a missing key is an error and so is an unknown one, because 
 | `[verify]` | `float_places` | Decimal places floats are rounded to before two result sets are compared |
 | `[answer]` | `max_rows_shown`, `llm_phrasing`, `currency`, `currency_symbol` | How the answer looks, whether a model may write the sentence (off), and the currency — **declared**, because the database stores a count of cents and records no currency anywhere |
 | `[confidence]` | four weights, `repair_penalty`, three thresholds | Integers in hundredths, because `0.55` invites a diff that reads `0.5500000001`. None may be zero: a zero weight silently disables a check the report still lists as having run |
+| `[gates]` | `judge_veto`, `hard_checks` | The rules that can withhold an answer **before** the score is consulted. `judge_veto = true` means a definite failure on either blind criterion refuses outright; `hard_checks` is two of the eight — `time_window` and `not_truncated`, the two that are not word lists over English. Turning either off turns a refusal back into an answer, which is the direction that costs somebody a wrong figure |
 | `[cost]` | two prices in micro-USD per 1k tokens | Both zero, which means **unpriced** and never "free". A trace records `priced: false` while they are |
 
 Model ids live in [`src/sqeual/config.py`](src/sqeual/config.py) and nowhere else — a model id
@@ -693,13 +785,18 @@ hard way.
 
 ## Honest caveats
 
-- **The tool failed two of the twenty-five questions in the way that matters most**, and the
-  cause is a hole in the confidence design rather than a bug: a weighted average cannot express
-  a veto. It is written up with the numbers in `docs/design.md` §53, it is not fixed in this
-  commit, and `sqeual eval` exits 1 on it today.
-- **The guard has no column-level policy.** `[guard] allowed_tables` can remove a table from
-  every question; there is no way to say "may read `customers`, never `customers.email`". That
-  gap is why the export question got an answer.
+- **The veto makes a noisy criterion expensive, and the first run under it proved that.** Two
+  correct answers were withheld because the guard injects a `LIMIT` into every statement, the
+  blind explainer faithfully describes it, and the criterion asking "does it compute anything
+  the question did not ask for" answered *yes* about the guard's own rewrite. Fixed by one
+  sentence in the criterion, written up in `docs/design.md` §54. The general point is the
+  caveat: **you cannot find out that a signal is noisy by averaging it**, and any other
+  criterion in here may be noisy in a way nothing has surfaced yet.
+- **A denied column may still be used in a `WHERE`.** `denied_columns` refuses `customers.email`
+  in any projection, `ORDER BY` or `GROUP BY`, at any level. A filter puts no value in front of
+  a reader, so it is allowed — which leaves an oracle, one question at a time. Closing that
+  needs a rate limit or an audit log, and claiming this rule closed it would be a claim the code
+  does not support.
 - **One accuracy number, from 25 questions, one model, one afternoon.** 13/14 is
   `[0.685, 0.987]`. Every rate in `eval.md` prints its interval for that reason, and most of
   them are wide enough that two runs would have to differ a great deal before anything had been
@@ -727,14 +824,14 @@ hard way.
 
 | Thing | Status |
 |---|---|
-| Stages 01–08 | **Implemented and tested.** 815 tests, 98% statement coverage, `ruff` clean at line length 100. None touches the network |
+| Stages 01–08 | **Implemented and tested.** 908 tests, 98% statement coverage, `ruff` clean at line length 100. None touches the network |
 | The whole pipeline, offline | **Ran.** `ask --dry-run` and `eval --dry-run` exercise every stage with no key, and CI runs both |
 | Forty golden questions, offline | **Ran synthetic.** [`eval.synthetic.md`](docs/examples/eval.synthetic.md), scripted provider, banner-first |
 | Twenty-five golden questions, live | **Ran live**, 2026-09-04, 100 calls. [`eval.live.md`](docs/examples/eval.live.md). It exited 1, and the section above says why |
 | All forty, live | **Not yet.** Forty at `k = 3` is about 240 calls, over the budget this was run under |
 | A judge from a different model family | **Not yet.** Needs a second key, not a code change |
-| A veto on a unanimous judge failure | **Not yet.** Diagnosed and costed in `docs/design.md` §53; deliberately not tuned against two observations |
-| A column-level guard policy | **Not yet.** The gap the export question found |
+| A veto on a definite judge failure | **Built.** `[gates] judge_veto`, on by default. An unreadable judge never vetoes, which is the asymmetry the whole thing rests on. `docs/design.md` §54 |
+| A column-level guard policy | **Built.** `[guard] denied_columns` and a `bulk_export` rule, rules 12 and 13 of fourteen |
 | `regress` guarding this on a pull request | **Not yet run end to end.** The seam is built and tested through a real subprocess; no baseline recorded, because a baseline is a live run |
 | A second eval run to compare against the first | **Not yet.** Which means no regression has been detected or ruled out by anything |
 | Deployed anywhere | **No** |
@@ -743,7 +840,7 @@ hard way.
 
 If you are here to steal ideas rather than to use the tool, these are the six I would take.
 
-1. **Parse it, do not grep it.** [`src/sqeual/guard/`](src/sqeual/guard/) — twelve named rules
+1. **Parse it, do not grep it.** [`src/sqeual/guard/`](src/sqeual/guard/) — fourteen named rules
    over a `sqlglot` tree, each returning a stable finding *code* rather than prose, because a
    repair loop and an evaluation both need to count kinds.
 2. **Resolve columns against the sources in scope.**
@@ -774,7 +871,7 @@ goldens/README.md          what makes a golden question, and what makes a trap w
 regress/                   8 cases in project 1's schema + a [target] kind = "command"
 src/sqeual/db/             seeded deterministic generator + the invented word lists
 src/sqeual/schema/         card, renderer, slicer
-src/sqeual/guard/          policy, twelve rules, the column resolver, the report
+src/sqeual/guard/          policy, fourteen rules, the column resolver, the report
 src/sqeual/execute/        read-only connection, budget, typed errors, ResultSet
 src/sqeual/providers/      the metered seam, the Gemini adapter, the pacer, the dry-run fake
 src/sqeual/generate/       prompt, committed examples, strict JSON parsing, time windows,

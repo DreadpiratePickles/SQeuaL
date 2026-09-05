@@ -143,3 +143,79 @@ def test_absolute_db_path_is_kept_as_given(tmp_path):
         tmp_path, [('path = "data/support.db"', 'path = "/var/data/support.db"')]
     )
     assert str(config.db.path) == "/var/data/support.db"
+
+
+# --- column-level guard policy ---------------------------------------------
+
+
+def test_a_denied_column_must_be_spelled_table_dot_column(tmp_path):
+    """`denied_columns = ["email"]` would load, match nothing, and leave a
+    reviewable file stating a control that does nothing. Rejected at load."""
+    with pytest.raises(ConfigFileError, match="table.column"):
+        load_test_config(
+            tmp_path, [('denied_columns = ["customers.email"]', 'denied_columns = ["email"]')]
+        )
+
+
+def test_a_denied_column_with_two_dots_is_refused(tmp_path):
+    with pytest.raises(ConfigFileError, match="denied_columns"):
+        load_test_config(
+            tmp_path,
+            [('denied_columns = ["customers.email"]', 'denied_columns = ["db.customers.email"]')],
+        )
+
+
+def test_denied_columns_are_lowercased(tmp_path):
+    """SQLite folds identifiers, so a policy that did not would be bypassable."""
+    config = load_test_config(
+        tmp_path, [('denied_columns = ["customers.email"]', 'denied_columns = ["Customers.EMAIL"]')]
+    )
+    assert config.guard.denied_columns == frozenset({"customers.email"})
+
+
+def test_denying_nothing_is_a_legitimate_policy(tmp_path):
+    config = load_test_config(
+        tmp_path, [('denied_columns = ["customers.email"]', "denied_columns = []")]
+    )
+    assert config.guard.denied_columns == frozenset()
+
+
+def test_max_unaggregated_rows_must_be_a_positive_integer(tmp_path):
+    with pytest.raises(ConfigFileError, match="max_unaggregated_rows"):
+        load_test_config(
+            tmp_path, [("max_unaggregated_rows = 50", "max_unaggregated_rows = 0")]
+        )
+
+
+# --- gates ------------------------------------------------------------------
+
+
+def test_a_hard_check_that_no_check_produces_is_refused(tmp_path):
+    """A gate on a check nobody produces would never fire and would still read
+    as a control in a file somebody reviewed."""
+    with pytest.raises(ConfigFileError, match="no check produces"):
+        load_test_config(
+            tmp_path,
+            [
+                (
+                    'hard_checks = ["time_window", "not_truncated"]',
+                    'hard_checks = ["time_window", "not_a_check"]',
+                )
+            ],
+        )
+
+
+def test_judge_veto_must_be_a_boolean(tmp_path):
+    with pytest.raises(ConfigFileError, match="judge_veto"):
+        load_test_config(tmp_path, [("judge_veto = true", 'judge_veto = "yes"')])
+
+
+def test_gating_on_nothing_is_a_legitimate_policy(tmp_path):
+    """Every check soft and the judge still a veto. Somebody may want that, and
+    an empty list is a different statement from a missing key."""
+    config = load_test_config(
+        tmp_path,
+        [('hard_checks = ["time_window", "not_truncated"]', "hard_checks = []")],
+    )
+    assert config.gates.hard_checks == frozenset()
+    assert config.gates.judge_veto is True

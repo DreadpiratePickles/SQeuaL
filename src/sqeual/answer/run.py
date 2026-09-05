@@ -11,6 +11,14 @@ answer is the question that needs answering plus the statement the tool was abou
 to run — and no figures at all. That is not a degraded answer, it is the correct
 one: a hedged number is repeated without its hedge in the first email that quotes
 it.
+
+**Since §54 the score no longer decides whether to answer.** Four gates do, and
+they run first: the guard, the hard deterministic checks, the blind judge's veto,
+and the hard result-shape check. A failing gate withholds the answer whatever the
+score says, and the score — still computed, still recorded — ranks the answers
+that got past every gate. WITHHELD and ABSTAINED are separate statuses because
+they are separate facts: one is a named check saying no, the other is the
+arithmetic saying it is not sure.
 """
 
 from dataclasses import dataclass
@@ -30,11 +38,15 @@ from .confidence import (
     judge_value,
 )
 from .format import RenderedCell, render_cells
+from .gates import Gate, evaluate_gates, withholding
 from .phrase import Phrasing, write_phrasing
 from .render import (
     render_assumptions,
     render_checks,
     render_confidence,
+    render_gates,
+    render_heading,
+    render_refusal,
     render_result,
     render_sql,
 )
@@ -44,6 +56,11 @@ class AnswerStatus(StrEnum):
     """What the user is handed, and which exit code says so."""
 
     ANSWERED = "answered"
+    WITHHELD = "withheld"
+    """A gate refused it. Distinct from ABSTAINED on purpose: an abstention is
+    the arithmetic saying it is not sure, and a withholding is a named check
+    saying no. Folding them together would hide which of the two happened, and
+    they are fixed by different things."""
     ABSTAINED = "abstained"
     CLARIFICATION = "clarification"
     GUARD_BLOCKED = "guard_blocked"
@@ -60,6 +77,9 @@ class Answer:
     confidence: Confidence | None
     cells: tuple[RenderedCell, ...]
     phrasing: Phrasing | None
+    gates: tuple[Gate, ...] = ()
+    """Every gate's verdict, including the ones that passed and the ones that had
+    nothing to decide. Reported on every answer, not only the withheld ones."""
 
     @property
     def shows_figures(self) -> bool:
@@ -70,119 +90,97 @@ class Answer:
         return self.phrasing.completion if self.phrasing else None
 
 
-def _heading(question: str) -> list[str]:
-    return [f"# {question}", ""]
-
-
-def _refusal_markdown(
+def _refusal(
     generation: GenerationOutcome,
+    gates: tuple[Gate, ...],
     *,
+    status: AnswerStatus,
     title: str,
     body: list[str],
     confidence: Confidence | None = None,
     checks: tuple[Check, ...] = (),
     same_family: bool = False,
-) -> str:
-    lines = _heading(generation.question) + [f"## {title}", "", *body, ""]
-    if confidence is not None:
-        lines += ["## Confidence", "", *render_confidence(confidence, same_family=same_family), ""]
-    if checks:
-        lines += ["## Checks", "", *render_checks(checks), ""]
+) -> Answer:
+    """One document that shows no figures, plus the gate table that explains it."""
     primary = generation.primary
-    if primary is not None and primary.report is not None:
-        lines += [
-            "## The statement this was about to run",
-            "",
-            "No figures are shown. Read the statement and run it yourself if you want them.",
-            "",
-            *render_sql(primary.report.normalised_sql),
-            "",
-        ]
-    elif generation.blocked_codes:
-        lines += [
-            "## What the guard found",
-            "",
-            *[f"- `{code}`" for code in generation.blocked_codes],
-            "",
-            "Nothing ran. A refused statement has no normalised form, so there is "
-            "nothing here for anybody to execute by hand.",
-            "",
-        ]
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _clarification_answer(generation: GenerationOutcome) -> Answer:
     return Answer(
+        status=status,
+        markdown=render_refusal(
+            question=generation.question,
+            title=title,
+            body=body,
+            gates=gates,
+            confidence=confidence,
+            checks=checks,
+            same_family=same_family,
+            normalised_sql=None
+            if primary is None or primary.report is None
+            else primary.report.normalised_sql,
+            blocked_codes=generation.blocked_codes,
+        ),
+        confidence=confidence,
+        cells=(),
+        phrasing=None,
+        gates=gates,
+    )
+
+
+def _clarification_answer(generation: GenerationOutcome, gates) -> Answer:
+    return _refusal(
+        generation,
+        gates,
         status=AnswerStatus.CLARIFICATION,
-        markdown=_refusal_markdown(
-            generation,
-            title="I need one more thing before I can answer this",
-            body=[generation.clarification or "The question could not be pinned down."],
-        ),
-        confidence=None,
-        cells=(),
-        phrasing=None,
+        title="I need one more thing before I can answer this",
+        body=[generation.clarification or "The question could not be pinned down."],
     )
 
 
-def _blocked_answer(generation: GenerationOutcome) -> Answer:
-    return Answer(
+def _blocked_answer(generation: GenerationOutcome, gates) -> Answer:
+    return _refusal(
+        generation,
+        gates,
         status=AnswerStatus.GUARD_BLOCKED,
-        markdown=_refusal_markdown(
-            generation,
-            title="The proposed statement was refused before it ran",
-            body=[
-                "The guard rejected every attempt, including the repair. Nothing "
-                "touched the database, so there is no partial answer and no number "
-                "to report.",
-                "",
-                f"Attempts: {len(generation.attempts)}. "
-                f"Repairs used: {generation.repairs_used}.",
-            ],
-        ),
-        confidence=None,
-        cells=(),
-        phrasing=None,
+        title="The proposed statement was refused before it ran",
+        body=[
+            "The guard rejected every attempt, including the repair. Nothing "
+            "touched the database, so there is no partial answer and no number "
+            "to report.",
+            "",
+            f"Attempts: {len(generation.attempts)}. "
+            f"Repairs used: {generation.repairs_used}.",
+        ],
     )
 
 
-def _unusable_answer(generation: GenerationOutcome) -> Answer:
-    return Answer(
+def _unusable_answer(generation: GenerationOutcome, gates) -> Answer:
+    return _refusal(
+        generation,
+        gates,
         status=AnswerStatus.UNUSABLE_REPLY,
-        markdown=_refusal_markdown(
-            generation,
-            title="The model's reply could not be read",
-            body=[
-                "The reply was not the JSON object this tool requires, so there was "
-                "no statement to check and nothing ran. It was not repaired in "
-                "place: pulling SQL out of prose means something chose which "
-                "statement to run, and nobody would know which.",
-                "",
-                f"`{generation.detail}`",
-            ],
-        ),
-        confidence=None,
-        cells=(),
-        phrasing=None,
+        title="The model's reply could not be read",
+        body=[
+            "The reply was not the JSON object this tool requires, so there was "
+            "no statement to check and nothing ran. It was not repaired in "
+            "place: pulling SQL out of prose means something chose which "
+            "statement to run, and nobody would know which.",
+            "",
+            f"`{generation.detail}`",
+        ],
     )
 
 
-def _failed_answer(generation: GenerationOutcome) -> Answer:
-    return Answer(
+def _failed_answer(generation: GenerationOutcome, gates) -> Answer:
+    return _refusal(
+        generation,
+        gates,
         status=AnswerStatus.EXECUTION_FAILED,
-        markdown=_refusal_markdown(
-            generation,
-            title="The statement passed every check and the database could not run it",
-            body=[
-                "This is a different fact from a bad question: re-writing the query "
-                "would produce the same failure.",
-                "",
-                f"`{generation.detail}`",
-            ],
-        ),
-        confidence=None,
-        cells=(),
-        phrasing=None,
+        title="The statement passed every check and the database could not run it",
+        body=[
+            "This is a different fact from a bad question: re-writing the query "
+            "would produce the same failure.",
+            "",
+            f"`{generation.detail}`",
+        ],
     )
 
 
@@ -234,8 +232,13 @@ def build_answer(
         provider: the metered seam, only used when `[answer] llm_phrasing` is on.
         pacer: spaces the phrasing call.
     """
+    gates = evaluate_gates(
+        generation_status=generation.status,
+        verification=verification,
+        settings=config.gates,
+    )
     if generation.status is not GenerationStatus.ANSWERED or verification is None:
-        return REFUSALS[generation.status](generation)
+        return REFUSALS[generation.status](generation, gates)
 
     primary = generation.primary
     result = primary.result
@@ -253,30 +256,57 @@ def build_answer(
         result=result, as_of=generation.as_of, settings=settings, float_places=float_places
     )
 
-    if confidence.level is ConfidenceLevel.ABSTAIN:
-        return Answer(
-            status=AnswerStatus.ABSTAINED,
-            markdown=_refusal_markdown(
-                generation,
-                title="I am not confident enough in this answer to show it",
-                body=[
-                    "The statement ran, and what it returned is deliberately not "
-                    "shown. The checks below say why the confidence is low. Refusing "
-                    "is a feature: a number with a hedge attached gets quoted "
-                    "without the hedge.",
-                    "",
-                    "**What the statement says it does**, back-translated by a model "
-                    "that was not shown the question:",
-                    "",
-                    f"> {verification.back_translation.explanation or '(unavailable)'}",
-                ],
-                confidence=confidence,
-                checks=verification.checks,
-                same_family=verification.same_family,
-            ),
+    # Gates before weights. This runs ahead of the abstain threshold and ahead of
+    # any comparison against the score, because the score cannot reach it: §53
+    # measured a run where three of four factors legitimately passed and the one
+    # component that reads meaning said no, and no weight or threshold refuses
+    # that. The score is still computed and still recorded, so a reader can see
+    # what the arithmetic thought of the answer that was withheld.
+    refused = withholding(gates)
+    if refused:
+        return _refusal(
+            generation,
+            gates,
+            status=AnswerStatus.WITHHELD,
+            title="A gate withheld this answer",
+            body=[
+                "A gate is not a weight: it runs before the confidence score and "
+                "the score cannot overrule it. The statement ran, and what it "
+                "returned is deliberately not shown.",
+                "",
+                *[f"- **{gate.name}** — {gate.detail}" for gate in refused],
+                "",
+                "**What the statement says it does**, back-translated by a model "
+                "that was not shown the question:",
+                "",
+                f"> {verification.back_translation.explanation or '(unavailable)'}",
+            ],
             confidence=confidence,
-            cells=(),
-            phrasing=None,
+            checks=verification.checks,
+            same_family=verification.same_family,
+        )
+
+    if confidence.level is ConfidenceLevel.ABSTAIN:
+        return _refusal(
+            generation,
+            gates,
+            status=AnswerStatus.ABSTAINED,
+            title="I am not confident enough in this answer to show it",
+            body=[
+                "Every gate let this through and the score is still below the "
+                "abstain threshold. The statement ran, and what it returned is "
+                "deliberately not shown. The checks below say why the confidence is "
+                "low. Refusing is a feature: a number with a hedge attached gets "
+                "quoted without the hedge.",
+                "",
+                "**What the statement says it does**, back-translated by a model "
+                "that was not shown the question:",
+                "",
+                f"> {verification.back_translation.explanation or '(unavailable)'}",
+            ],
+            confidence=confidence,
+            checks=verification.checks,
+            same_family=verification.same_family,
         )
 
     phrasing = None
@@ -291,7 +321,7 @@ def build_answer(
             grounded_dates=_grounded_dates(generation),
         )
 
-    lines = _heading(generation.question) + ["## Answer", ""]
+    lines = render_heading(generation.question) + ["## Answer", ""]
     if phrasing is not None and phrasing.accepted:
         lines += [phrasing.sentence, ""]
     lines += [*result_lines, ""]
@@ -303,6 +333,10 @@ def build_answer(
         lines += [f"_{phrasing.note}; the rendering above is the code's._", ""]
 
     lines += [
+        "## Gates",
+        "",
+        *render_gates(gates),
+        "",
         "## Confidence",
         "",
         *render_confidence(confidence, same_family=verification.same_family),
@@ -342,6 +376,7 @@ def build_answer(
         confidence=confidence,
         cells=cells,
         phrasing=phrasing,
+        gates=gates,
     )
 
 

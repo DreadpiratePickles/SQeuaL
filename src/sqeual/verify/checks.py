@@ -49,3 +49,22 @@ def pass_fraction(checks: tuple[Check, ...]) -> float | None:
     if not applicable:
         return None
     return sum(1 for check in applicable if check.status is CheckStatus.PASS) / len(applicable)
+
+
+CHECK_NAMES: tuple[str, ...] = (
+    "time_window",
+    "aggregation",
+    "entities",
+    "grouping",
+    "scalar_shape",
+    "top_n_rows",
+    "not_truncated",
+    "empty_result",
+)
+"""Every check `intent_checks` and `sanity_checks` can return, in that order.
+
+Written down here so that `[gates] hard_checks` can be validated against it at
+load time. A hard check naming something no check produces would be a gate that
+silently never fires, which is the one failure a gate must not have — and the
+name would look like a control in a reviewable file.
+"""

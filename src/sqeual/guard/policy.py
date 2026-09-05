@@ -8,7 +8,7 @@ names the tables a question needs, and `allowed_tables` is where that becomes
 an enforced boundary rather than a suggestion in a prompt.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 DENIED_FUNCTIONS: frozenset[str] = frozenset(
     {
@@ -49,6 +49,20 @@ class GuardPolicy:
     different finding from `unknown_table`: one is a policy decision, the other
     is a hallucination, and one code for both would hide both."""
     allowed_functions: frozenset[str]
+    denied_columns: frozenset[str] = frozenset()
+    """`table.column`, lowercased: columns that may not reach a reader through
+    any projection, ORDER BY or GROUP BY, at any level of a statement.
+
+    `allowed_tables` is all-or-nothing per table and cannot express "questions
+    may read `customers` but never `customers.email`". This can. It is a
+    *different layer* from §12's rule keeping per-row columns out of the schema
+    card's sample values: a column absent from the card is still a column a
+    model can name, because the card lists it by name and type."""
+    allow_denied_in_aggregates: bool = False
+    max_unaggregated_rows: int | None = None
+    """The largest LIMIT an unaggregated projection over a big table may carry.
+    `None` leaves the `bulk_export` rule with nothing to enforce, which is only
+    ever the case for a policy built by hand; `from_settings` always sets it."""
 
     @classmethod
     def from_settings(cls, settings) -> "GuardPolicy":
@@ -60,29 +74,51 @@ class GuardPolicy:
             allow_star=settings.allow_star,
             allowed_tables=settings.allowed_tables,
             allowed_functions=settings.allowed_functions,
+            denied_columns=settings.denied_columns,
+            allow_denied_in_aggregates=settings.allow_denied_in_aggregates,
+            max_unaggregated_rows=settings.max_unaggregated_rows,
         )
 
     def narrowed_to(self, tables) -> "GuardPolicy":
         """The same policy, restricted to `tables`.
 
         Phase B's bridge between the schema slice and the guard: the tables a
-        question was shown become the tables its SQL may reach. Unused in
-        Phase A, and here rather than in Phase B because the alternative — a
-        caller building a `GuardPolicy` by hand with five fields copied and one
-        changed — is how a limit gets dropped.
+        question was shown become the tables its SQL may reach.
+
+        `dataclasses.replace` rather than a hand-written constructor call. The
+        hand-written one listed every field, which meant that adding a limit to
+        this class and forgetting this method would silently unlock it for every
+        question that went through stage 05 — the field would exist in the file,
+        exist in the report, and be absent from the policy the generator
+        actually enforced.
         """
-        return GuardPolicy(
-            max_rows=self.max_rows,
-            max_subquery_depth=self.max_subquery_depth,
-            star_row_threshold=self.star_row_threshold,
-            allow_star=self.allow_star,
-            allowed_tables=frozenset(name.lower() for name in tables),
-            allowed_functions=self.allowed_functions,
-        )
+        return replace(self, allowed_tables=frozenset(name.lower() for name in tables))
 
     def permits_table(self, name: str) -> bool:
         """Whether policy allows this table. An empty allowlist permits all."""
         return not self.allowed_tables or name.strip().lower() in self.allowed_tables
+
+    def denies_column(self, qualified: str) -> bool:
+        """Whether `Table.column` is on the deny list. Case-insensitive.
+
+        SQLite folds identifiers, so a check that did not would be bypassable by
+        holding down shift.
+        """
+        return qualified.strip().lower() in self.denied_columns
+
+    def denied_on(self, table: str) -> tuple[str, ...]:
+        """The denied column names of one table, lowercased and sorted.
+
+        Used by the two places that have a table but no column reference: the
+        `SELECT *` case, where the star would expand over whatever is there, and
+        the schema card, which marks the columns before a model names one.
+        """
+        prefix = f"{table.strip().lower()}."
+        return tuple(
+            sorted(
+                entry[len(prefix):] for entry in self.denied_columns if entry.startswith(prefix)
+            )
+        )
 
     def permits_function(self, name: str) -> bool:
         """Whether policy allows this function. The deny list always wins."""

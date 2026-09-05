@@ -248,14 +248,28 @@ def test_run_refuses_a_guard_failure_before_touching_the_database(config, echo):
 
 def test_run_executes_the_normalised_statement_not_the_input(config, echo):
     """The LIMIT the guard injected has to be the one that ran, or the whole
-    chain is theatre."""
-    main(["run", "--config", str(config), "--sql", "SELECT id FROM orders"], echo=echo)
+    chain is theatre.
+
+    Grouped rather than a bare projection: 250 customers have orders, so the
+    injected `LIMIT 200` is visible in the row count. A bare `SELECT id FROM
+    orders` would now be refused by `bulk_export` before it could demonstrate
+    anything about the rewrite."""
+    main(
+        [
+            "run", "--config", str(config), "--sql",
+            "SELECT customer_id, COUNT(*) AS n FROM orders GROUP BY customer_id",
+        ],
+        echo=echo,
+    )
     assert "200 rows" in echo.text
 
 
 def test_run_says_when_the_result_was_truncated(config, echo):
     main(
-        ["run", "--config", str(config), "--sql", "SELECT id FROM orders LIMIT 200"],
+        [
+            "run", "--config", str(config), "--sql",
+            "SELECT customer_id, COUNT(*) AS n FROM orders GROUP BY customer_id LIMIT 200",
+        ],
         echo=echo,
     )
     assert "200 rows" in echo.text

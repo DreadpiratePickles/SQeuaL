@@ -1,6 +1,6 @@
 SYNTHETIC — every number below was produced by a scripted offline provider. No model was called. This says whether the harness computes what it claims, and nothing whatsoever about whether a model can write SQL.
 
-# Calibration — 2026-09-04T17:35:58+00:00
+# Calibration — 2026-09-05T03:52:08+00:00
 
 Accuracy says how often the tool was right. This says whether it **knew**.
 
@@ -10,9 +10,8 @@ Every question the tool answered is bucketed by the confidence it computed for t
 
 | confidence | mean score | accuracy | count | 95% Wilson |
 |---|---|---|---|---|
-| HIGH | 0.95 | 89.5% | 17/19 | [0.686, 0.971] |
-| MEDIUM | 0.63 | 33.3% | 1/3 | [0.061, 0.792] |
-| LOW | 0.50 | 0.0% | 0/2 | [0.000, 0.658] |
+| HIGH | 0.96 | 94.4% | 17/18 | [0.742, 0.990] |
+| MEDIUM | 0.60 | 100.0% | 1/1 | [0.207, 1.000] |
 
 Two things about how this table is built are worth knowing before arguing with it.
 
@@ -27,14 +26,11 @@ The confidence itself is computed, never asked of a model: four weighted factors
 | id | expected | confidence | score | correct | verdict |
 |---|---|---|---|---|---|
 | `orders_total_count` | answer | HIGH | 1.0000 | yes | match |
-| `refunds_berlin_last_month` | answer | MEDIUM | 0.6000 | **no** | miss |
 | `orders_by_status` | answer | HIGH | 1.0000 | yes | match |
 | `tickets_open_count` | answer | HIGH | 1.0000 | yes | match |
 | `avg_order_value` | answer | HIGH | 0.8000 | **no** | miss |
 | `refunds_by_reason` | answer | HIGH | 1.0000 | yes | match |
-| `customers_never_ordered` | answer | LOW | 0.5000 | **no** | miss |
 | `tickets_by_priority` | answer | HIGH | 1.0000 | yes | match |
-| `orders_last_month_count` | answer | HIGH | 0.8667 | **no** | miss |
 | `refund_total_all_time` | answer | HIGH | 1.0000 | yes | match |
 | `revenue_by_segment` | answer | HIGH | 1.0000 | yes | match |
 | `tickets_without_order` | answer | HIGH | 0.8000 | yes | match |
@@ -43,12 +39,10 @@ The confidence itself is computed, never asked of a model: four weighted factors
 | `agents_by_team` | answer | HIGH | 1.0000 | yes | match |
 | `list_product_categories` | answer | HIGH | 1.0000 | yes | match |
 | `countries_by_customers_top5` | answer | HIGH | 1.0000 | yes | match |
-| `avg_days_to_close_ticket` | answer | LOW | 0.5000 | **no** | miss |
 | `billing_tickets_last_month` | answer | HIGH | 1.0000 | yes | match |
-| `orders_over_two_hundred_euros` | answer | MEDIUM | 0.7000 | **no** | miss |
 | `list_support_teams` | answer | MEDIUM | 0.6000 | yes | match |
 | `products_never_ordered` | answer | HIGH | 1.0000 | yes | match |
 | `refunds_by_city_top5` | answer | HIGH | 1.0000 | yes | match |
 | `tickets_from_business_customers` | answer | HIGH | 0.8667 | yes | match |
 
-24 answered question(s). Everything the tool declined is absent from this table by construction: an answer it never gave has no confidence attached, and inventing one to fill the row would be the exact failure this document is here to detect.
+19 answered question(s). Everything the tool declined is absent from this table by construction: an answer it never gave has no confidence attached, and inventing one to fill the row would be the exact failure this document is here to detect.

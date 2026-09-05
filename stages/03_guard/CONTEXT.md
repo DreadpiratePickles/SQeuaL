@@ -12,7 +12,7 @@ should run in its place.
 |---|---:|---|---:|---|
 | `--sql` | 4 | **Untrusted input** | Yes | Parsed, never pattern-matched, never interpolated |
 | `SchemaCard` from stage 02 | 4 | Authoritative | Yes | Table names, column names, row counts |
-| `sqeual.toml` | 3 | Authoritative | Yes | `[guard]`, all six keys |
+| `sqeual.toml` | 3 | Authoritative | Yes | `[guard]`, all nine keys |
 | `src/sqeual/guard/policy.py` | 3 | Authoritative | Yes | `DENIED_FUNCTIONS`, which no configuration can override |
 
 The statement is untrusted whoever wrote it. It does not matter that a model
@@ -59,19 +59,39 @@ Every step is deterministic code. No model is called.
     `[guard] star_row_threshold`. Only the outermost, because the rule is about
     the shape of the answer, and a `*` inside a CTE that is then aggregated
     produces nothing wide for anyone to read.
-12. **Rewrite** the tree to carry `LIMIT [guard] max_rows` when it has none, a
+12. Check **every** projection, `ORDER BY` and `GROUP BY`, at every level, for a
+    column on `[guard] denied_columns`. Every level and not only the outermost:
+    `WITH c AS (SELECT email FROM customers) SELECT email FROM c` resolves the
+    outer `email` to a CTE, step 8's resolver correctly refuses to claim a table
+    for it, and a rule reading that silence as "not denied" is bypassed in one
+    line. The rule catches the projection that *put* the value there. An
+    aggregate over one is refused too unless `[guard] allow_denied_in_aggregates`
+    is set — the aggregate is where a leak hides, and `MIN(email)` is one
+    address. A `WHERE` is deliberately not checked, at any level: a filter puts no
+    value in front of a reader, and the oracle it leaves open is closed by a rate
+    limit or an audit log rather than by a wider projection rule. A `SELECT *` is
+    checked by table, at every level, because a star names no column and would
+    print every one of them.
+13. Check for **bulk export**: a projection with no aggregate, over a source
+    above `[guard] star_row_threshold`, carrying no LIMIT of
+    `[guard] max_unaggregated_rows` or fewer. Read from the statement **as the
+    model wrote it**, before step 14 injects a LIMIT — a rule satisfied by the
+    guard's own repair is the guard grading its own homework. Only the outermost
+    query's own sources count, for the same reason step 11 looks only at the
+    outermost projection.
+14. **Rewrite** the tree to carry `LIMIT [guard] max_rows` when it has none, a
     larger one, or one that is not a plain integer. This rule never fails: a
     model that forgot a LIMIT has not done anything wrong, and refusing the
     query teaches it nothing.
-13. If nothing failed, regenerate the statement from the tree with
+15. If nothing failed, regenerate the statement from the tree with
     `comments=False` and return it as `normalised_sql`.
 
 ## Outputs
 
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `GuardReport` (in process) | `rules` (twelve `RuleResult`s), `ok`, `codes`, `failures`, `normalised_sql`, `tables_used`, `columns_used`, `table_aliases` | Stage 04 (which runs `normalised_sql` and reads the plan through `table_aliases`), stage 05's repair loop (which reads `codes`), stage 08 (which counts findings by kind) |
-| stdout, via `guard --sql` | A twelve-line rule table, a verdict, and the statement to run | A human. Exit 0 pass, 1 fail |
+| `GuardReport` (in process) | `rules` (fourteen `RuleResult`s), `ok`, `codes`, `failures`, `normalised_sql`, `tables_used`, `columns_used`, `table_aliases` | Stage 04 (which runs `normalised_sql` and reads the plan through `table_aliases`), stage 05's repair loop (which reads `codes`), stage 08 (which counts findings by kind) |
+| stdout, via `guard --sql` | A fourteen-line rule table, a verdict, and the statement to run | A human. Exit 0 pass, 1 fail |
 
 `normalised_sql` is populated **only** for a passing report. There is no such
 thing as a partly-approved query, and a half-checked statement lying around next
@@ -80,10 +100,20 @@ to a FAIL is the kind of thing somebody eventually executes.
 ## Verify
 
 - `uv run pytest -q tests/test_guard_rules.py tests/test_guard_limits.py
-  tests/test_guard_resolution.py` —
-  102 tests. Every rule is tested in both directions, because a guard whose
+  tests/test_guard_resolution.py tests/test_guard_exposure.py` —
+  135 tests. Every rule is tested in both directions, because a guard whose
   failing path is untested might be returning PASS unconditionally and the suite
   would never notice.
+- Exposure cases: `SELECT name, email FROM customers LIMIT 200` — the statement
+  the first live evaluation actually ran — a denied column qualified, upper-cased,
+  in an `ORDER BY`, in a `GROUP BY`, inside an aggregate with the flag both ways,
+  and reachable through a `*`; the laundering cases — a CTE, a CTE that renames
+  it, a derived table, and a `*` inside a CTE — each of which would have walked
+  around an outermost-only rule; and, on the other side, a denied column in a
+  `WHERE`, a same-named column on another table, an unaggregated projection at
+  and either side of the export cap, a `LIMIT 10 + 5` that cannot be proved
+  small, and the committed reference for `products_never_ordered`, whose large
+  table is read only inside a subquery.
 - Adversarial cases: `SELECT 1; DROP TABLE tickets`, `PRAGMA`, `ATTACH`,
   `DETACH`, `VACUUM`, `load_extension`, `readfile`, `writefile`,
   `fts3_tokenizer`, a cross-database reference, a semicolon inside a comment,
@@ -133,12 +163,14 @@ back to a model.
 | `function_not_allowed` | `allowed_functions` | Not on the allowlist |
 | `subquery_too_deep` | `subquery_depth` | Past `max_subquery_depth` |
 | `star_not_allowed` | `star_expansion` | `SELECT *` over a table above the threshold |
+| `column_not_allowed` | `denied_columns` | A real column policy will not show a reader. Sibling of `table_not_allowed`, and deliberately not `unknown_column`: one means the model asked for something real it may not have, the other means it invented something |
+| `bulk_export` | `bulk_export` | An unaggregated projection over a large table with no small LIMIT. A **policy** failure and not a row cap: `max_rows` already bounds it at 200 rows, and 200 rows of a customer table is the thing being refused |
 
 Passing rules may also carry a note code: `limit_injected`, `limit_reduced`,
 `limit_replaced` or `limit_present`.
 
 A rule whose precondition failed is reported as `SKIP` rather than omitted, so
-that a report always has the same twelve lines and "we checked and it was fine"
+that a report always has the same fourteen lines and "we checked and it was fine"
 never renders the same as "we never looked".
 
 **Where this stage is deliberately silent.** The resolver says nothing about a

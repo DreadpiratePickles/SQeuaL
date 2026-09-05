@@ -3,7 +3,7 @@
 The order of the rules is load-bearing. Each one assumes the ones before it
 held: there is no point resolving columns in a statement that did not parse, or
 counting subquery depth in a `DROP TABLE`. A rule whose precondition failed is
-reported as SKIP rather than omitted, so a report always has the same twelve
+reported as SKIP rather than omitted, so a report always has the same fourteen
 lines and "we checked and it was fine" never renders the same as "we never
 looked".
 
@@ -19,6 +19,7 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
 from ..schema.card import SchemaCard
+from .exposure import check_bulk_export, check_denied_columns
 from .policy import GuardPolicy
 from .report import GuardReport, RuleResult, RuleStatus
 from .resolve import resolve_columns
@@ -52,9 +53,16 @@ RULE_ORDER: tuple[str, ...] = (
     "allowed_functions",
     "subquery_depth",
     "star_expansion",
+    "denied_columns",
+    "bulk_export",
     "row_limit",
 )
-"""Every report lists these twelve, in this order, whatever happened."""
+"""Every report lists these fourteen, in this order, whatever happened.
+
+The two exposure rules sit **before** `row_limit` because `bulk_export` reads
+the LIMIT the model wrote, and `row_limit` is the rule that writes one. A
+`bulk_export` satisfied by the guard's own injected LIMIT would be the guard
+grading its own homework."""
 
 
 def _substantive(statements: list[exp.Expression | None]) -> list[exp.Expression]:
@@ -147,6 +155,8 @@ def guard_sql(sql: str, card: SchemaCard, policy: GuardPolicy) -> GuardReport:
     done["allowed_functions"] = check_allowed_functions(statement, policy)
     done["subquery_depth"] = check_subquery_depth(statement, policy)
     done["star_expansion"] = check_star_expansion(statement, card, policy)
+    done["denied_columns"] = check_denied_columns(statement, card, policy)
+    done["bulk_export"] = check_bulk_export(statement, card, policy)
 
     limited, limit_result = apply_row_limit(statement, policy)
     done["row_limit"] = limit_result

@@ -1,4 +1,4 @@
-"""Stage 03: the twelve rules a proposed statement has to survive.
+"""Stage 03: the fourteen rules a proposed statement has to survive.
 
 Every rule is tested in both directions — a query that passes it and a query
 that fails it — because a guard whose failing path is untested is a guard that
@@ -132,7 +132,9 @@ def test_a_semicolon_hidden_in_a_comment_does_not_split_anything(session_card, p
 
 
 def test_a_semicolon_inside_a_string_literal_does_not_split_anything(session_card, policy):
-    report = check("SELECT id FROM orders WHERE status = 'a; DROP TABLE x'", session_card, policy)
+    report = check(
+        "SELECT id FROM orders WHERE status = 'a; DROP TABLE x' LIMIT 5", session_card, policy
+    )
     assert report.ok
 
 
@@ -140,7 +142,7 @@ def test_a_semicolon_inside_a_string_literal_does_not_split_anything(session_car
 
 
 def test_a_plain_select_passes(session_card, policy):
-    assert check("SELECT id FROM orders", session_card, policy).ok
+    assert check("SELECT id FROM orders LIMIT 5", session_card, policy).ok
 
 
 def test_a_with_select_passes(session_card, policy):
@@ -300,7 +302,7 @@ def test_the_allowed_date_functions_pass(session_card, policy):
     See docs/design.md §16."""
     sql = (
         "SELECT STRFTIME('%Y-%m', order_date), DATE(order_date), "
-        "JULIANDAY(order_date) FROM orders"
+        "JULIANDAY(order_date) FROM orders LIMIT 5"
     )
     report = check(sql, session_card, policy)
     assert report.ok, report.codes

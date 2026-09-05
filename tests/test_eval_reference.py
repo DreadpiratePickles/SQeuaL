@@ -62,11 +62,13 @@ def test_a_reference_the_guard_refuses_is_a_broken_case(tmp_path, session_db, se
 def test_a_reference_that_cannot_execute_is_a_broken_case(
     tmp_path, session_db, session_card
 ):
-    """Passes all twelve rules — real table, real column, allowed function — and
+    """Passes all fourteen rules — real table, real column, allowed function — and
     SQLite still refuses it, because `ROUND` does not take three arguments. The
     guard says nothing it cannot prove, and arity is stage 04's to catch."""
     config = phase_b_config(tmp_path, session_db)
-    outcome = run(config, session_card, "SELECT ROUND(total_cents, 2, 3) AS n FROM orders")
+    outcome = run(
+        config, session_card, "SELECT ROUND(total_cents, 2, 3) AS n FROM orders LIMIT 5"
+    )
     assert not outcome.ok
     assert "did not execute" in outcome.reason
     assert outcome.normalised_sql is not None
@@ -100,7 +102,7 @@ def test_a_truncated_reference_is_a_broken_case(
             plan=ExecutionPlan(steps=(), warnings=()),
         ),
     )
-    outcome = run(config, session_card, "SELECT id AS order_id FROM orders")
+    outcome = run(config, session_card, "SELECT id AS order_id FROM orders LIMIT 50")
     assert not outcome.ok
     assert "row cap" in outcome.reason
     assert outcome.result is not None and outcome.result.truncated

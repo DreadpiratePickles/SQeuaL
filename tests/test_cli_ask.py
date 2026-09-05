@@ -194,3 +194,80 @@ class TestHelp:
         code = main(["--config", str(cli_config(tmp_path, session_db))], echo=lines.append)
         assert code == 2
         assert "ask" in "\n".join(lines)
+
+
+# --- a withheld answer at the command line ---------------------------------
+
+
+class TestAWithheldAnswer:
+    """A gate refused it, so the caller gets 1 and the document carries no figure.
+
+    Driven with a scripted provider rather than `--dry-run`, because the offline
+    fake's judge always agrees. That is the right behaviour for a fake whose job
+    is to prove the wiring — but it means the veto cannot be seen through
+    `--dry-run` at all, and an exit code nobody exercised is an exit code that is
+    wrong the first time a pipeline reads it.
+    """
+
+    def vetoing_provider(self):
+        from conftest import ScriptedProvider, explanation_json, proposal_json, verdict_json
+
+        return ScriptedProvider(
+            [proposal_json("SELECT COUNT(*) AS n FROM orders")] * 3
+            + [
+                explanation_json("It counts every order in the table."),
+                verdict_json(False, "the question asked about refunds, not orders"),
+                verdict_json(False, "it counts orders, which was not asked for"),
+            ]
+        )
+
+    def ask_vetoed(self, config_path, tmp_path, monkeypatch, *extra):
+        from sqeual import cli_ask
+
+        monkeypatch.setattr(cli_ask, "build_provider", lambda args, config: self.vetoing_provider())
+        # And the judge, or `judge_provider_for` sees a model id that is not the
+        # configured one, builds a real Gemini provider from the environment and
+        # this test spends money. A scripted provider is only offline if every
+        # seam is scripted.
+        monkeypatch.setattr(cli_ask, "judge_provider_for", lambda args, config, provider: None)
+        return run(
+            config_path,
+            tmp_path,
+            "How much did we refund to customers in Berlin last month?",
+            *extra,
+        )
+
+    def test_a_withheld_answer_exits_one_like_any_other_refusal(
+        self, config_path, tmp_path, monkeypatch
+    ):
+        """1 and not 2: 2 means nothing ran, and this statement ran."""
+        code, output = self.ask_vetoed(config_path, tmp_path, monkeypatch)
+        assert code == 1
+        assert "A gate withheld this answer" in output
+        assert "it counts orders, which was not asked for" in output
+
+    def test_the_withheld_document_shows_the_gate_table(
+        self, config_path, tmp_path, monkeypatch
+    ):
+        code, output = self.ask_vetoed(config_path, tmp_path, monkeypatch)
+        assert code == 1
+        assert "## Gates" in output
+        assert "**WITHHELD**" in output
+
+    def test_the_trace_records_the_withholding(self, config_path, tmp_path, monkeypatch):
+        code, output = self.ask_vetoed(config_path, tmp_path, monkeypatch, "--json")
+        assert code == 1
+        trace = json.loads(output)
+        assert trace["status"] == "withheld"
+        assert trace["answer"]["shows_figures"] is False
+        judge = next(gate for gate in trace["gates"] if gate["gate"] == "judge")
+        assert judge["status"] == "FAIL"
+
+    def test_every_answer_status_has_an_exit_code(self):
+        """A status added without a code here is a `KeyError` at the moment a
+        caller most needs an answer, and only on the path that produced it."""
+        from sqeual.answer.run import AnswerStatus
+        from sqeual.cli_ask import EXIT_FOR_STATUS
+
+        assert set(EXIT_FOR_STATUS) == set(AnswerStatus)
+        assert EXIT_FOR_STATUS[AnswerStatus.WITHHELD] == 1

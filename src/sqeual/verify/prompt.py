@@ -26,8 +26,27 @@ ANSWERS_CRITERION = (
 )
 EXTRAS_CRITERION = (
     "The described query does not compute something the question {question!r} did "
-    "not ask for."
+    "not ask for. Ignore any row limit, LIMIT clause or maximum row count in the "
+    "description: this tool writes one into every statement itself, so it is never "
+    "something the query's author chose to compute."
 )
+"""The second sentence is a **correction**, not a hedge, and the first live run
+under §54's veto is what found it.
+
+The guard injects `LIMIT [guard] max_rows` into every statement that lacks one
+(§21), and §22 requires the explainer to describe the statement that actually
+ran — so a faithful back-translation of `SELECT COUNT(*) FROM orders` says "...
+limited to a maximum of 200 rows". Read literally, a row cap the question did not
+ask for **is** something the question did not ask for, and the judge was right to
+say so. Twice in four live questions it said so, on two statements that were
+correct.
+
+Before the veto that cost 30 weight points intermittently and was invisible.
+Making the judge decisive made it decisive, which is how a flaw in a criterion
+becomes a withheld answer. The criterion must not grade the tool's own rewrite as
+the model's extra computation — the same principle as `bulk_export` reading the
+LIMIT the model wrote rather than the one the guard injected: a system that grades
+its own repairs is grading its own homework, in one direction or the other."""
 
 CRITERION_NAMES: tuple[str, ...] = ("answers_the_question", "no_extra_computation")
 """Stable names for the two verdicts, so a trace and a score can refer to the

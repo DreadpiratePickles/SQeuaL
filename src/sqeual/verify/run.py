@@ -105,7 +105,11 @@ def verify_answer(
         sanity=sanity_checks(question=generation.question, result=primary.result),
         back_translation=back_translate(
             sql=primary.report.normalised_sql,
-            schema_markdown=render_card(card, generation.schema_slice.tables),
+            schema_markdown=render_card(
+                card,
+                generation.schema_slice.tables,
+                denied_columns=config.guard.denied_columns,
+            ),
             question=generation.question,
             provider=provider,
             pacer=pacer,

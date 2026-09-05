@@ -282,7 +282,7 @@ def check_subquery_depth(statement: exp.Expression, policy: GuardPolicy) -> Rule
     return _pass("subquery_depth", f"nested to depth {deepest}, limit {policy.max_subquery_depth}")
 
 
-def _starred_tables(
+def starred_tables(
     statement: exp.Select, card: SchemaCard, ctes: set[str]
 ) -> list[str]:
     """Tables the **outermost** SELECT's `*` would expand over.
@@ -327,7 +327,7 @@ def check_star_expansion(
     statement: exp.Select, card: SchemaCard, policy: GuardPolicy
 ) -> RuleResult:
     ctes = {cte.alias_or_name.lower() for cte in statement.find_all(exp.CTE)}
-    starred = _starred_tables(statement, card, ctes)
+    starred = starred_tables(statement, card, ctes)
     if not starred:
         return _pass("star_expansion", "no SELECT *")
     if policy.allow_star:

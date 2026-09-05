@@ -17,6 +17,7 @@ import re
 import pytest
 
 from conftest import ScriptedProvider, explanation_json, phase_b_config, proposal_json, verdict_json
+from sqeual.answer.gates import GateStatus
 from sqeual.answer.run import AnswerStatus
 from sqeual.pipeline import run_ask
 from sqeual.providers import RoleAwareFakeProvider
@@ -249,29 +250,73 @@ class TestTrace:
         assert outcome.trace["cost"]["priced"] is True
 
 
+ABSTAINING_QUESTION = "How much did we refund to customers in Berlin?"
+"""The same shape as `QUESTION` with the period removed, and the removal is what
+makes it an abstention rather than a withholding.
+
+`time_window` is a **hard** gate since §54: a question that names a period whose
+window the statement's literals do not match is refused outright, not scored
+down. So the run that ends in a genuine abstention has to be one where the hard
+checks had nothing to say — which is exactly what a question with no period gives
+them."""
+
+
 class TestAbstention:
+    """The arithmetic saying it is unsure, which is not a gate saying no.
+
+    Since §54 an abstention needs a judge that said **nothing**: a judge that
+    said no vetoes and never reaches the score, so every abstention left in the
+    system is one the deterministic evidence lost on its own. That makes this a
+    narrower path than it was, and it is still a path — the two outcomes are
+    different facts and `docs/design.md` §54 keeps them separate statuses.
+
+    `k = 1` drops the agreement factor (one sample cannot be consistent with
+    itself), the judge could not be read and is dropped too, and what is left is
+    an intent fraction of zero against a sanity fraction of one.
+    """
+
     def abstaining_provider(self):
-        """Valid SQL that answers a different question, and a judge that says so."""
+        """Valid SQL that answers a different question, and a judge nobody can read."""
         return ScriptedProvider(
-            [proposal_json("SELECT COUNT(*) AS n FROM orders")] * 3
+            [proposal_json("SELECT COUNT(*) AS n FROM orders")]
             + [
                 explanation_json("It counts every order in the table."),
-                verdict_json(False, "the question asked about refunds"),
-                verdict_json(False, "it counts orders, which was not asked for"),
+                "not json at all",
+                "also not json",
             ]
+        )
+
+    def abstain(self, config, card, tmp_path):
+        return ask(
+            config,
+            card,
+            tmp_path,
+            provider=self.abstaining_provider(),
+            question=ABSTAINING_QUESTION,
+            k=1,
         )
 
     def test_the_load_bearing_case_valid_and_irrelevant_abstains(
         self, config, session_card, tmp_path
     ):
         """`SELECT COUNT(*) FROM orders` for a question about refunds in Berlin."""
-        outcome = ask(config, session_card, tmp_path, provider=self.abstaining_provider())
+        outcome = self.abstain(config, session_card, tmp_path)
         assert outcome.answer.status is AnswerStatus.ABSTAINED
+
+    def test_an_abstention_is_not_a_withholding_and_says_so(
+        self, config, session_card, tmp_path
+    ):
+        """No gate fired. The score is what refused, and the document says which."""
+        outcome = self.abstain(config, session_card, tmp_path)
+        assert all(
+            gate.status is not GateStatus.FAIL for gate in outcome.answer.gates
+        ), outcome.answer.gates
+        assert "Every gate let this through" in outcome.answer.markdown
 
     def test_an_abstention_shows_no_result_figure_at_all(
         self, config, session_card, tmp_path
     ):
-        outcome = ask(config, session_card, tmp_path, provider=self.abstaining_provider())
+        outcome = self.abstain(config, session_card, tmp_path)
         value = str(outcome.generation.primary.result.rows[0][0])
         # Whole tokens, not substrings: "2000" is inside the contribution
         # "0.2000", and a substring assertion would fail on a coincidence rather
@@ -284,13 +329,13 @@ class TestAbstention:
     def test_an_abstention_still_shows_the_statement_so_a_human_can_run_it(
         self, config, session_card, tmp_path
     ):
-        outcome = ask(config, session_card, tmp_path, provider=self.abstaining_provider())
+        outcome = self.abstain(config, session_card, tmp_path)
         assert "SELECT COUNT(*) AS n FROM orders" in outcome.answer.markdown
 
     def test_an_abstention_shows_the_back_translation_so_it_can_be_disputed(
         self, config, session_card, tmp_path
     ):
-        outcome = ask(config, session_card, tmp_path, provider=self.abstaining_provider())
+        outcome = self.abstain(config, session_card, tmp_path)
         assert "It counts every order in the table." in outcome.answer.markdown
 
     def test_a_question_matching_no_table_asks_for_clarification(

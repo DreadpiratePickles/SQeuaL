@@ -101,7 +101,7 @@ that errored partway through reports what it spent rather than zero.
 
 | Path | Schema or format | Consumer |
 |---|---|---|
-| `runs/eval/<ts>/results.jsonl` | Line 1 a `header` record with the whole provenance; then one `result` object per question with its verdict, both digests, guard codes, **every stage-06 check with its status**, the judge verdicts, confidence, agreement, cost and latency | A human diagnosing one failure |
+| `runs/eval/<ts>/results.jsonl` | Line 1 a `header` record with the whole provenance; then one `result` object per question with its verdict, both digests, guard codes, **every stage-06 check with its status**, **every stage-07 gate with its status**, the judge verdicts, confidence, agreement, cost and latency | A human diagnosing one failure |
 | `runs/eval/<ts>/eval.json` | `banner` first, then `provenance`, `metrics` and every result | CI, and a later run comparing against this one |
 | `runs/eval/<ts>/eval.md` | The banner, the dangerous direction, the headline, per-tag accuracy, the traps, guard findings, agreement, calibration, cost, every question, and a plain-English summary | A human |
 | `runs/eval/<ts>/calibration.md` | The confidence curve with Wilson intervals, and every answered question with the score it was given | A human deciding whether the score means anything |
@@ -183,3 +183,10 @@ concentrated in one `kind` is a slicer or a schema problem; a drop spread evenly
 is usually the model id having moved underneath the run, which `provenance` in
 `results.jsonl` records precisely so that this question can be answered in one
 look.
+
+Since §54 there is a second escalation, and it points the other way. A run whose
+**answer rate** fell is a run where gates withheld answers, and `gates` on each
+result names which one. A cluster of `judge: FAIL` on questions whose reference
+matched is not a model that got worse; it is a criterion that is wrong about
+something — which is exactly what the first run under the veto turned out to be,
+and diagnosing it took one look at this field.

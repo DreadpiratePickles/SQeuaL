@@ -7,9 +7,13 @@
 
 ## Objective
 
-Render the answer from the rows, compute a confidence from evidence, and refuse
-outright when that confidence is too low — such that every figure a user sees was
-formatted by code from a database cell and none of it was written by a model.
+Render the answer from the rows, **run the gates that can withhold it outright**,
+compute a confidence from evidence, and refuse when that confidence is too low —
+such that every figure a user sees was formatted by code from a database cell and
+none of it was written by a model.
+
+Gates before weights. A gate answers yes or no and runs first; the score then
+ranks the answers that got past every gate. `docs/design.md` §54.
 
 ## Inputs
 
@@ -17,7 +21,7 @@ formatted by code from a database cell and none of it was written by a model.
 |---|---|---|---|---|
 | The `GenerationOutcome` from stage 05 | 4 | Authoritative | Yes | `primary.result`, `primary.report.normalised_sql`, `agreement`, `k`, `repairs_used`, `as_of`, `time_window`, `schema_sha256` |
 | The `Verification` from stage 06 | 4 | Authoritative | Yes | `intent_fraction`, `sanity_fraction`, the judge verdicts, `same_family` |
-| `sqeual.toml` | 3 | Authoritative | Yes | All of `[answer]`, all of `[confidence]`, `[verify] float_places`, `[cost]` |
+| `sqeual.toml` | 3 | Authoritative | Yes | All of `[answer]`, all of `[confidence]`, all of `[gates]`, `[verify] float_places`, `[cost]` |
 | `answer/prompts/phrase_v1.md` | 3 | Authoritative | Only when `llm_phrasing` | The phrasing prompt |
 
 The stage is given the rows and never the raw model reply from stage 05. That
@@ -28,11 +32,39 @@ property of the code.
 
 ## Process (built)
 
+0. **Evaluate the four gates** (`gates.py`), in a fixed order, on every run
+   including the ones that never reached a model:
+   - `guard` — stage 05's verdict, reported here rather than recomputed, so one
+     table holds every reason an answer was withheld;
+   - `intent` — FAIL if any check named in `[gates] hard_checks` failed. The six
+     soft checks are still scored and still printed and cannot withhold anything;
+   - `judge` — FAIL if **either** blind criterion came back a definite `fail`,
+     when `[gates] judge_veto` is on. An unreadable judge is NA and never a veto:
+     a 503 is a silence, and an outage must not turn every answer in a deployment
+     into a refusal. §36 already drops an unread judge from the score; this is the
+     same fact one layer up;
+   - `sanity` — the hard result-shape check, same rule as `intent`.
+
+   A failing gate produces status **WITHHELD**: no figures, the gate table saying
+   which gate fired and what it found, the back-translation, the checks, the
+   score with its working, and the statement, so a human can run it. The score is
+   computed and recorded on a withheld answer rather than suppressed — a reader
+   should be able to see what the arithmetic thought of the answer that was
+   refused, which is the whole of §53's finding.
+
+   **NA is not a pass.** A gate with nothing to decide on says so, in the same
+   words on every run, for the same reason stage 06's checks report NA rather
+   than being omitted.
+
 1. **Compute the confidence** (`confidence.py`). Four measured factors, weighted
    by `[confidence]` and averaged over the ones that **apply**:
    - `intent` — the share of applicable intent and shape checks that passed;
    - `judge` — 1.0 both criteria passed, 0.5 one did, 0.0 neither, and *dropped*
-     if either errored;
+     if either errored. Since §54 this factor can in practice only be 1.0 or
+     dropped, because any definite `fail` has already withheld the answer at step
+     0. That is a real consequence and it is stated rather than hidden: the score
+     is now almost entirely a summary of the **deterministic** evidence, which is
+     what it was always better at;
    - `agreement` — the share of the `k` samples whose rows matched the primary's,
      and *dropped* at `k = 1`, because one sample agreeing with itself is a
      tautology and counting it would let `--k 1` buy confidence it did not earn;
@@ -78,7 +110,9 @@ property of the code.
    the row count, the elapsed time and the schema hash.
 
 **Below `[confidence] abstain_threshold`, the answer is a refusal and shows no
-figures at all.** Not a number with a hedge attached — a hedged number is
+figures at all.** ABSTAINED and WITHHELD are separate statuses because they are
+separate facts — one is the arithmetic saying it is unsure, the other is a named
+check saying no — and they are fixed by different things. Not a number with a hedge attached — a hedged number is
 repeated without its hedge in the first email that quotes it, which is how a
 low-confidence guess becomes a figure in a board pack. What it shows instead is
 the back-translation, the checks, the score with its working, and the statement
@@ -93,7 +127,7 @@ else.
 | Path | Schema or format | Consumer |
 |---|---|---|
 | `runs/<ts>/answer.md` | The rendered document | A human |
-| `runs/<ts>/trace.json` | `confidence{score, level, repair_penalty, factors[{name, applicable, value, weight, contribution, note}]}`, `answer{status, shows_figures, phrasing{sentence, accepted, phrasing_rejected, ungrounded_tokens}}`, `cost{calls, tokens, micro_usd, currency, priced}` | Stage 08, and anything embedding SQeuaL |
+| `runs/<ts>/trace.json` | `gates[{gate, status, detail}]`, `confidence{score, level, repair_penalty, factors[{name, applicable, value, weight, contribution, note}]}`, `answer{status, shows_figures, phrasing{sentence, accepted, phrasing_rejected, ungrounded_tokens}}`, `cost{calls, tokens, micro_usd, currency, priced}` | Stage 08, and anything embedding SQeuaL |
 | stdout | The document, then the run directory | A human running `sqeual ask` |
 
 `cost.priced` is `false` while `[cost]` holds zeros, so a cost of 0 cannot be
@@ -119,6 +153,23 @@ read as a bill of nothing.
 - An abstention contains no result cell as a whole numeric token, `cells` is
   empty, and `shows_figures` is `False` — while still showing the statement.
 
+`tests/test_answer_gates.py` (32 cases) covers the gates:
+
+- A definite judge `fail` on **either** criterion withholds, and the withheld
+  document quotes the reason the judge gave and shows no figure from the result.
+- The §53 run exactly: every other factor legitimately passes, the score is
+  above the abstain threshold, and the answer is withheld anyway. Turning
+  `[gates] judge_veto` off shows the same answer again — the change is a switch
+  somebody can read in a diff.
+- An **unreadable** judge does not veto: the answer is shown, the judge factor is
+  still dropped from the score, and the gate says "could not be read" rather than
+  anything that could be mistaken for agreement.
+- One error and one definite fail still vetoes.
+- A hard check failing fails its gate; a soft one does not; a hard check that did
+  not apply leaves the gate NA rather than PASS.
+- Every run reports the same four gates in the same order, on answered runs and
+  guard-blocked runs alike, in the document and in `trace.json`.
+
 ## Approval
 
 No human gate on rendering. What is blocked is structural: no code path here
@@ -131,6 +182,11 @@ both silently change the meaning of every answer ever rendered. Raising
 lowering `[confidence] abstain_threshold` turns refusals into guesses — those two
 are the changes a reviewer should question hardest.
 
+`[gates] judge_veto = false` and any removal from `[gates] hard_checks` now join
+them. Both turn a refusal back into an answer, which is the direction that costs
+somebody a wrong figure rather than a re-run, and both are one line in a
+reviewable file.
+
 ## Failure Behavior (built)
 
 | Failure | Behavior |
@@ -139,6 +195,7 @@ are the changes a reviewer should question hardest.
 | Stage 05 was guard-blocked | The codes, and the note that a refused statement has no normalised form for anybody to run. Exit **2** |
 | Stage 05's reply was unparseable | The parse error, and why it was not repaired in place. Exit **2** |
 | Stage 05's statement could not execute | The SQLite message, and the note that re-writing would fail identically. Exit **3** |
+| A gate failed | **WITHHELD**: the gate table, the reason it gave, back-translation, checks, the score with its working, and the SQL. **No figures.** Exit **1** — the statement ran, so this is not a 2 |
 | Confidence below `abstain_threshold` | Refusal plus back-translation plus checks plus SQL, and **no figures**. Exit **1** |
 | `ResultSet.truncated` | Stated in the answer, and `not_truncated` fails, which lowers the confidence toward abstention |
 | Zero rows | "No rows matched", with the SQL. Exit **0** — an empty result is a correct answer |
@@ -148,4 +205,6 @@ are the changes a reviewer should question hardest.
 
 Escalation path: a refusal caused by low confidence is a question for stage 06,
 not for this stage's formatter. Read the checks and the back-translation in
-`trace.json` before touching a prompt.
+`trace.json` before touching a prompt. A **withholding** is a narrower question
+still — `trace.json`'s `gates` block names the one gate that fired, and the
+answer to "why was this refused" is that gate's `detail` and nothing else.

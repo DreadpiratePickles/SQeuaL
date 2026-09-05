@@ -1,10 +1,10 @@
-"""The six `sqeual.toml` sections Phase B added, and their validation.
+"""The seven `sqeual.toml` sections the pipeline added, and their validation.
 
 Phase A's limits said what a query may do. These say what a *model* is asked,
 how many times, how the answer it proposes is scored, and — the one that
 matters most — where the line falls between showing a number and refusing to.
 
-Two of them deserve their reason stated here rather than only in the file:
+Three of them deserve their reason stated here rather than only in the file:
 
 **`[time] as_of` is a committed date, not `today`.** "Last month" has to mean
 the same thing on every run or the same question gives two different answers a
@@ -16,6 +16,12 @@ control.
 **`[confidence]` weights are integers in hundredths.** A threshold is a line
 somebody argues about in a pull request; `0.55` invites a diff that reads
 `0.5500000001`. The division by 100 happens exactly once, in `confidence.py`.
+
+`[gates]` arrived after the first live evaluation and is a seventh section. It is
+deliberately *not* part of `[confidence]`, because a gate is not a weight: §54
+argues that a weighted average of four numbers cannot be dragged below a
+threshold by one of them, and putting the veto in the same table as the weights
+would invite exactly the tuning that does not work.
 """
 
 import datetime as dt
@@ -29,8 +35,10 @@ from .config_values import (
     percentage,
     positive_int,
     section_of,
+    string_list,
     temperature,
 )
+from .verify.checks import CHECK_NAMES
 
 PIPELINE_SECTIONS: dict[str, tuple[str, ...]] = {
     "time": ("as_of",),
@@ -47,6 +55,7 @@ PIPELINE_SECTIONS: dict[str, tuple[str, ...]] = {
         "medium_threshold",
         "abstain_threshold",
     ),
+    "gates": ("judge_veto", "hard_checks"),
     "cost": ("input_micro_usd_per_1k_tokens", "output_micro_usd_per_1k_tokens"),
 }
 
@@ -119,6 +128,24 @@ class ConfidenceSettings:
     high_threshold: int
     medium_threshold: int
     abstain_threshold: int
+
+
+@dataclass(frozen=True)
+class GatesSettings:
+    """Which checks can withhold an answer outright, rather than score it down.
+
+    Two fields and no weights, on purpose. A gate answers yes or no and runs
+    before anything is averaged; `docs/design.md` §54 sets out why the first live
+    evaluation could not be fixed by moving a weight or a threshold.
+    """
+
+    judge_veto: bool
+    """Whether a definite FAIL on either blind back-translation criterion
+    withholds the answer. On by default. An *unreadable* judge never vetoes,
+    whatever this says: a 503 is a silence and a `fail` is a statement."""
+    hard_checks: frozenset[str]
+    """Deterministic checks whose FAIL withholds the answer. Every other check
+    stays a weighted factor. Validated against `CHECK_NAMES` at load time."""
 
 
 @dataclass(frozen=True)
@@ -209,6 +236,29 @@ def load_confidence(document: dict[str, Any], *, path) -> ConfidenceSettings:
                 f"than '{lower}' ({getattr(settings, lower)}); the levels are read top down."
             )
     return settings
+
+
+def load_gates(document: dict[str, Any], *, path) -> GatesSettings:
+    """Read `[gates]`, checking every hard check against the checks that exist.
+
+    A `hard_checks` entry naming nothing is rejected rather than ignored. It
+    would otherwise load cleanly, gate nothing, and leave a reviewable file
+    stating a control that never fires — the same failure mode `denied_columns`
+    is validated against in `config_file.py`.
+    """
+    section = section_of(document, "gates", PIPELINE_SECTIONS["gates"], path=path)
+    names = string_list(section, "hard_checks", path=path, allow_empty=True)
+    unknown = sorted({name for name in names} - set(CHECK_NAMES))
+    if unknown:
+        raise ConfigFileError(
+            f"{path}: [gates] hard_checks names {', '.join(repr(name) for name in unknown)}, "
+            f"which no check produces. Known checks: {', '.join(CHECK_NAMES)}. A gate on a "
+            "check that does not exist would never fire and would still read as a control."
+        )
+    return GatesSettings(
+        judge_veto=boolean(section, "judge_veto", path=path),
+        hard_checks=frozenset(names),
+    )
 
 
 def load_cost(document: dict[str, Any], *, path) -> CostSettings:

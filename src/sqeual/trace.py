@@ -167,6 +167,19 @@ def _verification_json(verification: Verification | None) -> dict | None:
     }
 
 
+def _gates_json(gates) -> list[dict]:
+    """Every gate, including the ones that passed and the ones with nothing to say.
+
+    A block of its own rather than a field on `answer`, because the question a
+    reader arrives with — *which check withheld this?* — has a wrong answer if
+    the passing gates are missing. §54.
+    """
+    return [
+        {"gate": gate.name, "status": gate.status.value, "detail": gate.detail}
+        for gate in gates
+    ]
+
+
 def _confidence_json(confidence) -> dict | None:
     if confidence is None:
         return None
@@ -237,6 +250,7 @@ def build_trace(
             "attempts": [_attempt_json(attempt) for attempt in generation.attempts],
         },
         "verify": _verification_json(verification),
+        "gates": _gates_json(answer.gates),
         "confidence": _confidence_json(answer.confidence),
         "answer": {
             "status": answer.status.value,

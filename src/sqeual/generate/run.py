@@ -198,7 +198,9 @@ def generate_candidates(
         db_path=config.db.path,
         float_places=config.verify.float_places,
         system=load_generate_prompt(),
-        schema_markdown=render_card(card, schema_slice.tables),
+        schema_markdown=render_card(
+            card, schema_slice.tables, denied_columns=config.guard.denied_columns
+        ),
         as_of=config.time.as_of,
         examples=tuple(examples if examples is not None else load_examples())[
             : settings.max_examples

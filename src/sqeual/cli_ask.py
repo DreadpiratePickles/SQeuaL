@@ -5,8 +5,8 @@ That is deliberate and it is the one place in this repository where the
 vocabulary shifts, so it is written down here rather than discovered:
 
     0  answered — a document with figures in it
-    1  abstained, or a clarification is needed. The tool declined to show a
-       number. This is a successful outcome of a working tool.
+    1  withheld, abstained, or a clarification is needed. The tool declined to
+       show a number. This is a successful outcome of a working tool.
     2  the guard refused the statement after the repair budget was spent, or the
        model never produced a reply this tool could read. **Nothing ran.**
     3  could not run — bad configuration, no API key, a missing database, or a
@@ -43,6 +43,11 @@ EXIT_CANNOT_RUN = 3
 
 EXIT_FOR_STATUS: dict[AnswerStatus, int] = {
     AnswerStatus.ANSWERED: EXIT_ANSWERED,
+    # A gate withheld it. 1 and not 2: 2 means nothing ran, and here the
+    # statement was guarded, executed and then refused on what it turned out to
+    # mean. To a caller that is the same fact as an abstention — no figure — and
+    # `trace.json` says which of the two it was.
+    AnswerStatus.WITHHELD: EXIT_ABSTAINED,
     AnswerStatus.ABSTAINED: EXIT_ABSTAINED,
     AnswerStatus.CLARIFICATION: EXIT_ABSTAINED,
     AnswerStatus.GUARD_BLOCKED: EXIT_GUARD_BLOCKED,

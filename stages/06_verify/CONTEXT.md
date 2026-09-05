@@ -3,7 +3,7 @@
 > Implemented in `src/sqeual/verify/`. It exists because of what the guard
 > deliberately does *not* claim: `guard_sql` proves a statement is well-formed,
 > single, read-only and made of real tables and columns, and nothing in its
-> twelve rules has an opinion about whether it answers anybody's question.
+> fourteen rules has an opinion about whether it answers anybody's question.
 
 ## Objective
 
@@ -71,10 +71,31 @@ this stage makes on its own behalf; step 4 is project 1's judge.
    wrong question and misses one that answers the right question *and* three
    others.
 
+   The second criterion carries a correction the first live run under §54's veto
+   found: **it tells the judge to ignore any row limit in the description.** The
+   guard injects `LIMIT [guard] max_rows` into every statement that lacks one,
+   and step 3 shows the explainer the statement that actually ran — so a faithful
+   back-translation says "limited to a maximum of 200 rows", and a criterion
+   asking "does it compute anything the question did not ask for" was correctly
+   answering *yes* about the guard's own rewrite. It withheld two correct answers
+   in four live questions before the sentence was added. A verifier must not grade
+   the guard's repairs, in either direction.
+
 **A judge error is not a fail and is never a pass.** A verdict that could not be
 parsed, or a provider that could not be reached, is recorded as `error`, and
 stage 07 drops the whole judge factor from the confidence average rather than
 counting the half that came back.
+
+**Since §54 a definite `fail` is a veto, and the asymmetry above is what makes
+that safe.** Stage 07 withholds the answer outright on either criterion coming
+back `fail`, whatever the score says — so the distinction this stage draws
+between "the judge disagreed" and "the judge could not be read" stopped being a
+scoring nicety and became the difference between a refused answer and a shown
+one. An `error` must never be recorded as a `fail` here: a 503 storm would then
+refuse every question in a deployment, and nobody would be able to tell
+afterwards which refusals had been real. This stage's job is unchanged — it
+reports what the judge said — but the cost of getting that report wrong is now
+larger, and `tests/test_answer_gates.py` pins both directions.
 
 **The self-preference problem is live and is not solved here.**
 `config.JUDGE_MODEL_ID` is defined as `SQL_MODEL_ID` — one provider key exists in
@@ -93,6 +114,16 @@ anything.
 | `runs/<ts>/trace.json` | `verify.intent[]`, `verify.sanity[]` (`check`, `status`, `evidence`), `verify.back_translation{explanation, error, verdicts[], explain_model_id, judge_model_id}`, `verify.same_family` | Stage 07, stage 08, and a human reading a refusal |
 | `Verification` | `intent_fraction`, `sanity_fraction`, `checks`, `back_translation`, `same_family` | Stage 07 |
 
+Two of the eight checks are **hard** and the other six are soft; the split lives
+in `[gates] hard_checks` and is stage 07's to apply, not this stage's. This stage
+still reports all eight the same way. `time_window` and `not_truncated` are the
+hard pair because neither is a heuristic over English: one compares date literals
+against a window this program resolved from `[time] as_of`, and the other reads a
+flag the executor set. `aggregation`, `entities` and `grouping` stay soft
+precisely because this contract already documents their false positives, and a
+gate built on a documented false positive is a gate people rephrase their way
+around.
+
 ## Verify (built)
 
 `tests/test_verify_intent.py` (33 cases) and
@@ -107,6 +138,8 @@ anything.
   nothing to check" must never render the same.
 - A judge reply that cannot be parsed is `error`, and a provider failure is
   `error` — neither is `fail`.
+- The extras criterion names the injected row limit and excludes it, asserted on
+  the criterion text rather than on a model's behaviour.
 - A failed explanation leaves **both** verdicts unavailable and makes only one
   call, because there is nothing to grade.
 - The exclusive-upper-bound spelling passes; the wrong month fails and names the
@@ -131,7 +164,7 @@ step 4 worth quoting. It needs a key, not a code review.
 | Stage 05 produced no executed statement | This stage does not run at all. `verify_answer` raises if called anyway, because attaching a confidence to a refusal is the thing this tool exists not to do |
 | Back-translation call fails, or its reply is unparseable | `explanation` is `None`, `error` records why, and **both** verdicts are `error`. Never defaulted to pass |
 | `judge_criterion` returns an unparseable verdict | That verdict is `error` with the raw reason. A judge that cannot be read has not agreed |
-| Judge verdict is fail | Recorded as `fail`; the judge factor falls, and stage 07 decides what that costs |
+| Judge verdict is fail | Recorded as `fail`. Since §54 stage 07 reads that as a **veto** and withholds the answer, so this row is now the difference between an answer and a refusal rather than a few points of score |
 | No intent check applies to a question | `intent_fraction` is `None`, and stage 07 drops the factor rather than scoring the absence |
 | An empty result | FLAGged and surfaced in the answer. Never failed |
 

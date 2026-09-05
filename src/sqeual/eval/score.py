@@ -98,6 +98,14 @@ class QuestionResult:
     """Integer micro-USD. Money is never a float here, and zero means unpriced."""
     latency_ms: int
     error: str = ""
+    gates: tuple[tuple[str, str], ...] = ()
+    """`(name, status)` for every stage-07 gate. Recorded beside the checks for
+    the same reason: `eval` writes no trace, and *which gate withheld an answer*
+    is the first question a reader of a run asks about a question that was not
+    answered. A verdict of `caught` says the tool declined; it does not say
+    whether the judge vetoed it, a hard check failed, or the guard refused the
+    statement outright, and those are three different systems working."""
+
 
     @property
     def scored(self) -> bool:
@@ -143,6 +151,7 @@ class QuestionResult:
             "guard_codes": list(self.guard_codes),
             "judge_statuses": list(self.judge_statuses),
             "checks": [{"check": name, "status": status} for name, status in self.checks],
+            "gates": [{"gate": name, "status": status} for name, status in self.gates],
             "clarification": self.clarification,
             "candidate_sql": self.candidate_sql,
             "candidate_result_digest": self.candidate_digest,
@@ -206,6 +215,10 @@ def _judge_statuses(outcome: AskOutcome) -> tuple[str, ...]:
     if verification is None:
         return ()
     return tuple(verdict.status for verdict in verification.back_translation.verdicts)
+
+
+def _gates(outcome: AskOutcome) -> tuple[tuple[str, str], ...]:
+    return tuple((gate.name, gate.status.value) for gate in outcome.answer.gates)
 
 
 def _checks(outcome: AskOutcome) -> tuple[tuple[str, str], ...]:
@@ -276,6 +289,7 @@ def score_question(
         else primary.result.row_count,
         judge_statuses=_judge_statuses(outcome),
         checks=_checks(outcome),
+        gates=_gates(outcome),
         clarification=generation.clarification,
         calls=cost["calls"],
         input_tokens=cost["input_tokens"],
@@ -307,6 +321,7 @@ def broken_reference_result(
         candidate_row_count=None,
         judge_statuses=(),
         checks=(),
+        gates=(),
         clarification=None,
         calls=0,
         input_tokens=0,
@@ -351,6 +366,7 @@ def errored_result(
         candidate_row_count=None,
         judge_statuses=(),
         checks=(),
+        gates=(),
         clarification=None,
         calls=0 if spent is None else spent.calls,
         input_tokens=0 if spent is None else spent.input_tokens,

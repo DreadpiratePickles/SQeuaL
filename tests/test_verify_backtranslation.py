@@ -85,6 +85,18 @@ class TestCriteria:
         ]
         assert "does not compute" in criteria[1][1]
 
+    def test_the_extras_criterion_excludes_the_row_limit_this_tool_injects(self):
+        """The guard writes a LIMIT into every statement (§21) and the explainer
+        describes the statement that ran (§22), so a faithful back-translation
+        mentions a row cap the question never asked for. A criterion that graded
+        that as extra computation would be grading the guard's own rewrite — and
+        under §54's veto it withheld two correct answers in four live questions
+        before this sentence was added."""
+        _name, text = build_criteria(QUESTION)[1]
+        assert "row limit" in text
+        assert "LIMIT" in text
+        assert "this tool writes one into every statement itself" in text
+
     def test_both_criteria_quote_the_question(self):
         for _name, text in build_criteria(QUESTION):
             assert QUESTION in text

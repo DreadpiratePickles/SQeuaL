@@ -16,6 +16,11 @@ run it themselves.
 The confidence block is written out factor by factor, with each weight and each
 contribution, so a score of 0.43 reads as a sentence rather than arriving as a
 number nobody can interrogate.
+
+Since §54 there is a **gate table above it**, on every document including the
+ones that show figures. The score ranks answers; the gates decide whether there
+is an answer at all, and a reader who cannot see which gate withheld one is
+being handed a refusal they cannot argue with.
 """
 
 from collections.abc import Sequence
@@ -23,6 +28,7 @@ from collections.abc import Sequence
 from ..verify.checks import Check, CheckStatus
 from .confidence import Confidence, ConfidenceLevel
 from .format import RenderedCell, format_cell
+from .gates import Gate, GateStatus
 
 TRUNCATION_NOTE = (
     "**The result was cut off at the row cap.** A total over it would be short and "
@@ -162,3 +168,94 @@ def render_assumptions(assumptions: Sequence[str]) -> list[str]:
     if not assumptions:
         return ["_The model recorded no assumptions._"]
     return [f"- {assumption}" for assumption in assumptions]
+
+
+GATE_MARKS: dict[GateStatus, str] = {
+    GateStatus.PASS: "PASS",
+    GateStatus.FAIL: "**WITHHELD**",
+    GateStatus.NA: "n/a",
+}
+
+GATE_NOTE = (
+    "A gate answers yes or no and runs **before** the score. The score ranks the "
+    "answers that got past every gate; it cannot rescue one that did not, and no "
+    "weight and no threshold reaches a gate. See the design note _Gates before "
+    "weights_."
+)
+"""Deliberately free of numerals, including the section number it would like to "
+cite. Every digit in the tool's own voice has to trace to something the code
+computed — `tests/test_pipeline.py` asserts exactly that over the whole document
+— and a `§54` in a fixed string would be the first exception to a rule with no
+exceptions."""
+
+
+def _cell(text: str) -> str:
+    """One detail, safe to put in a Markdown table cell.
+
+    A judge writes the reason in prose, and a stray pipe or newline in it would
+    silently break the row it was reporting — which is the row a reader most
+    needs to be able to read.
+    """
+    return text.replace("|", "\\|").replace("\n", " ").strip()
+
+
+def render_gates(gates: Sequence[Gate]) -> list[str]:
+    """The gate table. Every gate, every run, whether or not it fired."""
+    lines = ["| gate | verdict | what it found |", "|---|---|---|"]
+    lines += [
+        f"| {gate.name} | {GATE_MARKS[gate.status]} | {_cell(gate.detail)} |"
+        for gate in gates
+    ]
+    return lines + ["", GATE_NOTE]
+
+
+def render_heading(question: str) -> list[str]:
+    return [f"# {question}", ""]
+
+
+def render_refusal(
+    *,
+    question: str,
+    title: str,
+    body: Sequence[str],
+    gates: Sequence[Gate] = (),
+    confidence: Confidence | None = None,
+    checks: Sequence[Check] = (),
+    same_family: bool = False,
+    normalised_sql: str | None = None,
+    blocked_codes: Sequence[str] = (),
+) -> str:
+    """Every document that shows no figures, in one shape.
+
+    Abstention, clarification, a guard refusal, an unreadable reply, a failed
+    execution and — since §54 — a withheld answer all render through here, so
+    that the sections a reader looks for are in the same order and the same
+    words whichever refusal they are reading.
+    """
+    lines = render_heading(question) + [f"## {title}", "", *body, ""]
+    if gates:
+        lines += ["## Gates", "", *render_gates(gates), ""]
+    if confidence is not None:
+        lines += ["## Confidence", "", *render_confidence(confidence, same_family=same_family), ""]
+    if checks:
+        lines += ["## Checks", "", *render_checks(checks), ""]
+    if normalised_sql is not None:
+        lines += [
+            "## The statement this was about to run",
+            "",
+            "No figures are shown. Read the statement and run it yourself if you want them.",
+            "",
+            *render_sql(normalised_sql),
+            "",
+        ]
+    elif blocked_codes:
+        lines += [
+            "## What the guard found",
+            "",
+            *[f"- `{code}`" for code in blocked_codes],
+            "",
+            "Nothing ran. A refused statement has no normalised form, so there is "
+            "nothing here for anybody to execute by hand.",
+            "",
+        ]
+    return "\n".join(lines).rstrip() + "\n"
