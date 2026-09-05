@@ -6,7 +6,7 @@ behaviour: a rule with a reason written down is cheap to revisit, and a rule
 without one gets re-litigated every six months.
 
 Phase A covers stages 01–04 and §§1–30. Phase B covers stages 05–07 and §§31–42,
-and is where the model finally arrives. Phase C covers stage 08 and §§43–53, and
+and is where the model finally arrives. Phase C covers stage 08 and §§43–54, and
 is where the tool stops arguing that it behaves and gets measured — §53 is what
 the measurement found, which is a hole in Phase B that no amount of Phase C could
 have argued its way out of.

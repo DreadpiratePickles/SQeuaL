@@ -47,8 +47,8 @@ correct refusal as a failed sample, which inverts the measurement completely.
 | Holds | Reference SQL, executed at eval time | Plain-English criteria, judged by a model |
 | Asks | Is the answer right? | Does the answer still behave the way we said? |
 | Needs | The database, the guard, the sandbox | Only the rendered text |
-| Cases | 40 | 8 |
-| Cost | ~150 model calls at `k = 3` | ~8 target calls plus ~19 judge calls |
+| Cases | 40 | 9 |
+| Cost | ~150 model calls at `k = 3` | ~9 target calls plus ~20 judge calls |
 | When | Deliberately, when you want an accuracy figure | On a pull request |
 
 `tests/test_regress_integration.py` loads `regress/goldens.yaml` with project 1's

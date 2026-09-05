@@ -8,7 +8,7 @@
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab)](.python-version)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![tests: 815](https://img.shields.io/badge/tests-815-brightgreen)](tests/)
+[![tests: 908](https://img.shields.io/badge/tests-908-brightgreen)](tests/)
 [![coverage: 98%](https://img.shields.io/badge/coverage-98%25-brightgreen)](#status)
 [![numbers: never written by the model](https://img.shields.io/badge/numbers-never%20written%20by%20the%20model-8a2be2)](#the-principle-the-model-never-writes-a-number)
 [![sql: parsed, not regexed](https://img.shields.io/badge/sql-parsed%2C%20not%20regexed-8a2be2)](#faq)
@@ -953,7 +953,7 @@ src/sqeual/config*.py      model identifiers in one file; sqeual.toml's validati
 src/sqeual/cli*.py         the argument parser, the dispatch table, the exit codes
 scripts/sqeual.py          db build | schema show|slice | guard | run | ask | eval | ask-target
 stages/0*/CONTEXT.md       eight stage contracts, seven sections each
-docs/design.md             fifty-three decisions and their reasons
+docs/design.md             fifty-four decisions and their reasons
 docs/regress-integration.md how project 1 guards this repository, and how project 9 would ship
 docs/examples/             committed evidence. Every file says LIVE or SYNTHETIC on line 1
 runs/                      one directory per ask, one per eval                (gitignored)
