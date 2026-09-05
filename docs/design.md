@@ -522,7 +522,7 @@ dates rendered from ISO text. A model may supply a sentence *template* with name
 placeholders; a placeholder with no matching column is rejected. A truncated
 `ResultSet` must say so, which is why `truncated` is on the type in Phase A.
 
-**Phase C — stage 08, `eval`.** Built; §§43–53 cover it. Golden questions with
+**Phase C — stage 08, `eval`.** Built; §§43–54 cover it. Golden questions with
 reference SQL, scored on **execution accuracy** — does the candidate's result set
 equal the reference's — rather than string equality, because there are many
 correct spellings of one query. Alongside it, the metric this whole project
