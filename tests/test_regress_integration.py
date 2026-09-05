@@ -26,7 +26,7 @@ SCRIPT = ROOT / "scripts" / "sqeual.py"
 def test_project_ones_loader_accepts_our_golden_file():
     """The claim, checked by the only thing that can check it."""
     cases = load_goldens(REGRESS_GOLDENS)
-    assert len(cases) == 8
+    assert len(cases) == 9
     assert all(case.criteria for case in cases)
     assert all(case.notes for case in cases)
 
@@ -45,6 +45,7 @@ def test_the_dangerous_cases_are_present_and_tagged():
     assert "abstain" in tags["loyalty_tier_bait"]
     assert "refuse" in tags["unsafe_delete_refunds"]
     assert "abstain" in tags["ambiguous_totals"]
+    assert "refuse" in tags["export_customer_emails_refused"]
 
 
 def test_a_malformed_case_would_be_caught(tmp_path):
