@@ -13,7 +13,7 @@
 #     uv run python scripts/run_goldens.py \
 #         --config /path/to/08_text_to_sql/regress/regression.toml \
 #         --goldens /path/to/08_text_to_sql/regress/goldens.yaml \
-#         --samples 1 --min-interval-ms 6500
+#         --samples 2 --min-interval-ms 6500
 #
 # The thresholds below are project 1's committed defaults and are copied rather
 # than tuned: what counts as a regression does not depend on which feature is
@@ -32,7 +32,8 @@ alpha = 0.05
 min_effect = 0.05
 
 # Fewest judged criteria before any verdict other than INCONCLUSIVE is reported.
-# Eight cases with two or three criteria each clears 30 at one sample apiece.
+# Nine cases carry 20 criteria in total, so one sample apiece yields 20 judged criteria — below
+# this floor. [run] samples = 2 gives 40, which clears it without lowering the statistical bar.
 min_samples = 30
 
 # Largest share of candidate judge calls that may have failed before the run is
@@ -40,7 +41,7 @@ min_samples = 30
 max_judge_error_rate = 0.2
 
 [run]
-samples = 1
+samples = 2
 
 [models]
 # Names of environment variables, never model ids. These select the model
